@@ -14,8 +14,8 @@ Use this checklist before tagging and publishing a release.
 
 ```bash
 SANDBOX_RUN_INTEGRATION=1 \
-SANDBOX_TEST_BASE_URL=https://sandbox-gateway.cloud.seaart.ai \
-SANDBOX_TEST_API_KEY=... \
+SANDBOX_TEST_BASE_URL="${SEACLOUD_BASE_URL}" \
+SANDBOX_TEST_API_KEY="${SEACLOUD_API_KEY}" \
 SANDBOX_TEST_TEMPLATE_ID=tpl-base-dc11799b9f9f4f9e \
 PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 ```

@@ -87,6 +87,7 @@ class BuildServiceUnitTest(unittest.TestCase):
                 self.assertEqual(json.loads(request.data.decode("utf-8")), {
                     "name": "demo",
                     "visibility": "personal",
+                    "baseTemplateID": "tpl-base-1",
                     "image": "docker.io/library/alpine:3.20",
                     "cpuCount": 2,
                     "envs": {"APP_ENV": "test"},
@@ -101,7 +102,7 @@ class BuildServiceUnitTest(unittest.TestCase):
                 }))
             if "/api/v1/templates?" in request.full_url:
                 return FakeResponse(200, json.dumps([]))
-            if request.full_url.endswith("/api/v1/templates/aliases/demo"):
+            if request.full_url.endswith("/api/v1/templates/aliases/tpl-1"):
                 return FakeResponse(200, json.dumps({"templateID": "tpl-1", "public": False}))
             if "/api/v1/templates/tpl-1?limit=10&nextToken=build-1" in request.full_url:
                 return FakeResponse(200, json.dumps({
@@ -114,6 +115,7 @@ class BuildServiceUnitTest(unittest.TestCase):
                     "tags": ["v1"],
                     "name": "demo",
                     "visibility": "personal",
+                    "baseTemplateID": "tpl-base-1",
                     "image": "example-image:v1",
                     "imageSource": "dockerfile",
                     "envdVersion": "sandbox-builder-v1",
@@ -155,6 +157,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         created = service.create_template({
             "name": "demo",
             "visibility": "personal",
+            "baseTemplateID": "tpl-base-1",
             "image": "docker.io/library/alpine:3.20",
             "cpuCount": 2,
             "envs": {"APP_ENV": "test"},
@@ -165,7 +168,7 @@ class BuildServiceUnitTest(unittest.TestCase):
             limit=20,
             offset=40,
         ))
-        aliased = service.get_template_by_alias("demo")
+        aliased = service.get_template_by_alias("tpl-1")
         detail = service.get_template(
             "tpl-1",
             GetTemplateParams(limit=10, next_token="build-1"),
@@ -177,6 +180,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         self.assertEqual(listed, [])
         self.assertEqual(aliased["templateID"], "tpl-1")
         self.assertEqual(detail["templateID"], "tpl-1")
+        self.assertEqual(detail["baseTemplateID"], "tpl-base-1")
         self.assertEqual(detail["imageSource"], "dockerfile")
         self.assertEqual(detail["createdBy"]["email"], "test-user")
         self.assertEqual(detail["builds"][0]["status"], "ready")
@@ -324,6 +328,20 @@ class BuildServiceUnitTest(unittest.TestCase):
             service.get_template("tpl-1", GetTemplateParams(limit=101))
         with self.assertRaises(ValidationError):
             service.get_template_by_alias(" ")
+        with self.assertRaisesRegex(ValidationError, "official templates are not supported by the public SDK"):
+            service.create_template({
+                "name": "official-template",
+                "visibility": "official",
+                "image": "docker.io/library/alpine:3.20",
+            })
+        with self.assertRaisesRegex(ValidationError, "official templates are not supported by the public SDK"):
+            service.update_template("tpl-1", {"visibility": "official"})
+        with self.assertRaisesRegex(ValidationError, "template field type is not supported by the public SDK"):
+            service.create_template({
+                "name": "demo",
+                "image": "docker.io/library/alpine:3.20",
+                "type": "base",
+            })
         with self.assertRaises(ValidationError):
             service.get_build_status("tpl-1", "build-1", BuildStatusParams(limit=101))
         with self.assertRaises(ValidationError):

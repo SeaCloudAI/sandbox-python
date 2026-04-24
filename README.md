@@ -16,16 +16,45 @@ pip install seacloud-sandbox
 
 `control` and `build` talk to the gateway. Runtime access is derived from sandbox create/detail/connect responses; callers should not hardcode runtime endpoints or tokens.
 
-## Recommended Workflow
+## Environment
 
-Most applications only need the root client:
+Use environment variables for gateway configuration in all examples and quick starts:
 
-1. Initialize `Client(base_url=..., api_key=...)`.
-2. Create, list, get, or connect sandboxes from the root client.
-3. Keep working from the bound sandbox object:
-   `reload()`, `logs()`, `pause()`, `refresh()`, `set_timeout()`, `connect()`, `delete()`.
-4. When the sandbox exposes `envdUrl`, switch into runtime operations through `sandbox.runtime`.
-5. Use `client.build` only for template/build workflows.
+- `SEACLOUD_BASE_URL`: SeaCloudAI gateway entrypoint
+- `SEACLOUD_API_KEY`: API key used for gateway routing and authentication
+- `SEACLOUD_TEMPLATE_ID`: sandbox template identifier or official template type for your target environment
+
+Set them once in your shell:
+
+```bash
+export SEACLOUD_BASE_URL="https://sandbox-gateway.cloud.seaart.ai"
+export SEACLOUD_API_KEY="..."
+export SEACLOUD_TEMPLATE_ID="tpl-..."
+```
+
+Default production gateway:
+
+```text
+https://sandbox-gateway.cloud.seaart.ai
+```
+
+Use `SEACLOUD_TEMPLATE_ID` for production integrations. It can be either a concrete template ID such as `tpl-...` or a stable official template type such as `base`, `claude`, or `codex` when your environment publishes those official templates.
+
+## Production Readiness
+
+- Initialize one root client per process and reuse it.
+- Treat every quick start as creating billable or quota-bound resources unless it explicitly cleans them up.
+- Prefer explicit template references from configuration over hardcoded example values.
+- In SeaCloudAI environments, prefer official template types such as `base`, `claude`, or `codex` when you want a stable platform-managed entrypoint.
+- Use longer client timeouts for `waitReady` flows and image builds.
+- Derive runtime access from sandbox responses instead of storing runtime endpoints or tokens in config.
+
+## Compatibility
+
+- Python: use a supported CPython version for the published package and pin the SDK version in production deployments.
+- API model: this SDK targets the unified SeaCloudAI sandbox gateway and keeps public template APIs limited to user-facing fields.
+- Stability: operator/admin routes may exist on the gateway, but they are not part of the public SDK workflow described in this README.
+- Retry model: treat create/delete/build operations as remote control-plane actions; add idempotency and retry policy in your application layer according to your workload.
 
 ## Quick Start
 
@@ -37,21 +66,22 @@ import os
 from sandbox import Client
 
 client = Client(
-    base_url="https://sandbox-gateway.cloud.seaart.ai",
+    base_url=os.environ["SEACLOUD_BASE_URL"],
     api_key=os.environ["SEACLOUD_API_KEY"],
     timeout=180,
 )
 
 sandbox = client.create_sandbox({
-    "templateID": "base",
-    "workspaceId": "python-sdk-demo",
+    "templateID": os.environ["SEACLOUD_TEMPLATE_ID"],
     "timeout": 1800,
     "waitReady": True,
 })
-
-print(sandbox["sandboxID"], sandbox.get("envdUrl"))
-if sandbox.get("envdUrl"):
-    print(sandbox.runtime.base_url)
+try:
+    print(sandbox["sandboxID"], sandbox.get("envdUrl"))
+    if sandbox.get("envdUrl"):
+        print(sandbox.runtime.base_url)
+finally:
+    sandbox.delete()
 ```
 
 ### Bound Sandbox Workflow
@@ -72,17 +102,18 @@ import os
 from sandbox import Client
 
 client = Client(
-    base_url="https://sandbox-gateway.cloud.seaart.ai",
+    base_url=os.environ["SEACLOUD_BASE_URL"],
     api_key=os.environ["SEACLOUD_API_KEY"],
 )
 
 template = client.build.create_template({
     "name": "demo",
-    "visibility": "personal",
     "image": "docker.io/library/alpine:3.20",
 })
-
-print(template["templateID"], template["buildID"])
+try:
+    print(template["templateID"], template["buildID"])
+finally:
+    client.build.delete_template(template["templateID"])
 ```
 
 ### Runtime Helper
@@ -94,7 +125,7 @@ from sandbox import Client
 from sandbox.cmd import FileRequest, UploadBytesRequest
 
 client = Client(
-    base_url="https://sandbox-gateway.cloud.seaart.ai",
+    base_url=os.environ["SEACLOUD_BASE_URL"],
     api_key=os.environ["SEACLOUD_API_KEY"],
 )
 
@@ -117,7 +148,7 @@ finally:
     created.delete()
 ```
 
-## Root Client First
+## Recommended Usage
 
 For most integrations, stay on the root client as long as possible:
 
@@ -138,7 +169,6 @@ Low-level submodules remain available when you want direct stateless calls or ne
 - system: `metrics`, `shutdown`
 - sandboxes: `create_sandbox`, `list_sandboxes`, `get_sandbox`, `delete_sandbox`
 - sandbox operations: `get_sandbox_logs`, `pause_sandbox`, `connect_sandbox`, `set_sandbox_timeout`, `refresh_sandbox`, `send_heartbeat`
-- admin: `get_pool_status`, `start_rolling_update`, `get_rolling_update_status`, `cancel_rolling_update`
 
 Recommended root-client path:
 
@@ -148,6 +178,12 @@ Recommended root-client path:
 
 Low-level direct methods like `delete_sandbox` and `get_sandbox_logs` remain available on the root client when you want stateless calls.
 
+### Operator APIs
+
+The root client also includes operator-oriented methods such as `get_pool_status`, `start_rolling_update`, `get_rolling_update_status`, and `cancel_rolling_update`.
+
+These routes are intended for platform operators, not normal application workloads. Keep them out of business-facing integrations unless you are explicitly building operational tooling.
+
 ### Build Plane Namespace
 
 `client.build` exposes:
@@ -156,6 +192,18 @@ Low-level direct methods like `delete_sandbox` and `get_sandbox_logs` remain ava
 - direct build: `direct_build`
 - templates: `create_template`, `list_templates`, `get_template_by_alias`, `get_template`, `update_template`, `delete_template`
 - builds: `create_build`, `get_build_file`, `rollback_template`, `list_builds`, `get_build`, `get_build_status`, `get_build_logs`
+
+The public template request surface intentionally stays small: `name`, `image` or `dockerfile`, and a few optional runtime settings such as `visibility`, `baseTemplateID`, `envs`, `cpuCount`, `memoryMB`, `diskSizeMB`, `ttlSeconds`, `port`, `startCmd`, `readyCmd`.
+
+`create_template` and `update_template` reject `visibility="official"` in the public SDK.
+
+`get_template_by_alias` is a stable-ref lookup endpoint. It resolves a template by `templateID` or by an official template `type`; it should not be treated as a personal/team display-name search API.
+
+## Resource Safety
+
+- The quick starts are written for disposable resources and should be adapted before copy-pasting into production jobs.
+- Prefer explicit cleanup with `sandbox.delete()` and `client.build.delete_template(...)` when running probes, smoke tests, or CI.
+- For long-lived workloads, move cleanup and timeout policy into your own lifecycle manager instead of relying on sample code defaults.
 
 ### Runtime Namespace
 
@@ -207,8 +255,8 @@ Use production smoke tests only with explicitly provided credentials and disposa
 
 ```bash
 SANDBOX_RUN_INTEGRATION=1 \
-SANDBOX_TEST_BASE_URL=https://sandbox-gateway.cloud.seaart.ai \
-SANDBOX_TEST_API_KEY=... \
+SANDBOX_TEST_BASE_URL="${SEACLOUD_BASE_URL}" \
+SANDBOX_TEST_API_KEY="${SEACLOUD_API_KEY}" \
 SANDBOX_TEST_TEMPLATE_ID=tpl-base-dc11799b9f9f4f9e \
 PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 ```
@@ -219,8 +267,8 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 
 ```bash
 SANDBOX_RUN_INTEGRATION=1 \
-SANDBOX_TEST_BASE_URL=https://sandbox-gateway.cloud.seaart.ai \
-SANDBOX_TEST_API_KEY=... \
+SANDBOX_TEST_BASE_URL="${SEACLOUD_BASE_URL}" \
+SANDBOX_TEST_API_KEY="${SEACLOUD_API_KEY}" \
 SANDBOX_TEST_TEMPLATE_ID=... \
 PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 ```

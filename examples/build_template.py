@@ -38,7 +38,6 @@ def main() -> None:
 
     created = client.build.create_template({
         "name": f"python-build-example-{time.time_ns()}",
-        "visibility": "personal",
         "image": image,
     })
     print("created template:", created["templateID"], created["buildID"], created["names"])
@@ -46,9 +45,6 @@ def main() -> None:
     try:
         detail = client.build.get_template(created["templateID"])
         print("template detail:", detail["templateID"], detail["image"], detail["visibility"])
-
-        builds = client.build.list_builds(created["templateID"])
-        print("build history count:", len(builds.get("builds", [])))
     finally:
         if not keep_resources:
             client.build.delete_template(created["templateID"])

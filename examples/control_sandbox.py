@@ -40,7 +40,6 @@ def main() -> None:
 
     created = client.create_sandbox({
         "templateID": template_id,
-        "workspaceId": "python-example",
         "timeout": 1800,
         "waitReady": True,
     })
@@ -51,9 +50,6 @@ def main() -> None:
     try:
         detail = created.reload()
         print("sandbox detail:", detail["sandboxID"], detail.get("state"), detail["status"])
-
-        heartbeat = client.send_heartbeat(created["sandboxID"], {"status": "healthy"})
-        print("heartbeat:", heartbeat["received"], heartbeat["status"], heartbeat.get("request_id"))
     finally:
         if not keep_resources:
             created.delete()

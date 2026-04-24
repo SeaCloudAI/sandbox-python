@@ -68,14 +68,13 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
         })
         template_id = created["templateID"]
         build_id = created.get("buildID", "")
-        alias = (created.get("aliases") or [name])[0]
         self.assertTrue(template_id)
 
         try:
             listed = self.service.list_templates(None)
             self.assertIsInstance(listed, list)
 
-            aliased = self.service.get_template_by_alias(alias)
+            aliased = self.service.get_template_by_alias(template_id)
             self.assertEqual(aliased["templateID"], template_id)
 
             detail = self.service.get_template(template_id)

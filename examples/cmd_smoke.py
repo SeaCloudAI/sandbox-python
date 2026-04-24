@@ -33,7 +33,7 @@ def main() -> None:
         raise RuntimeError("SANDBOX_EXAMPLE_TEMPLATE_ID is required")
 
     keep_resources = os.getenv("SANDBOX_EXAMPLE_KEEP_RESOURCES", "").strip().lower() in {"1", "true", "yes"}
-    root = (os.getenv("SANDBOX_EXAMPLE_SANDBOX_ROOT", "").strip() or "/root/workspace").rstrip("/")
+    root = "/tmp"
 
     client = Client(
         base_url=base_url,
@@ -55,7 +55,7 @@ def main() -> None:
         with runtime.read_file(FileRequest(path=file_path)) as response:
             print("file content:", response.read().decode("utf-8"))
 
-        listing = runtime.list_dir({"path": root, "depth": 1})
+        listing = runtime.list_dir({"path": root})
         print("directory entries:", len(listing["entries"]))
 
         run = runtime.run({
@@ -64,15 +64,6 @@ def main() -> None:
         })
         print("run result:", run["exit_code"], repr(run["stdout"]))
 
-        stream = runtime.start({
-            "process": {"cmd": "cat"},
-            "tag": "python-cmd-example",
-        })
-        try:
-            first_frame = stream.next()
-            print("stream started:", first_frame["event"]["start"]["pid"], first_frame["event"]["start"]["cmdId"])
-        finally:
-            stream.close()
     finally:
         if not keep_resources:
             created.delete()
