@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 This project follows Semantic Versioning for public SDK APIs.
 
+## [0.1.1] - 2026-04-24
+
+### Changed
+
+- Renamed the published PyPI package to `seacloud-sandbox`.
+- Added GitHub Actions PyPI publishing through Trusted Publishing.
+
 ## [0.1.0] - 2026-04-23
 
 ### Added
