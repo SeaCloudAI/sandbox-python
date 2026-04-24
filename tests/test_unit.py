@@ -41,7 +41,7 @@ class FakeResponse:
 
 class MockClient(Client):
     def __init__(self, handler) -> None:
-        super().__init__(base_url="https://hermes-gateway.sandbox.cloud.vtrix.ai", api_key="unit-auth-value")
+        super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         self._handler = handler
         self.build.open = handler
 
@@ -51,7 +51,7 @@ class MockClient(Client):
 
 class MockCommandService(CommandService):
     def __init__(self, handler) -> None:
-        super().__init__(base_url="https://hermes-gateway.sandbox.cloud.vtrix.ai", access_token="unit-runtime-auth")
+        super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", access_token="unit-runtime-auth")
         self._handler = handler
 
     def _open_request(self, method, path, **kwargs):
@@ -74,7 +74,7 @@ class ClientUnitTest(unittest.TestCase):
                 self.assertEqual(json.loads(request.data.decode("utf-8")), {"templateID": "tpl", "waitReady": True})
                 return FakeResponse(201, json.dumps({
                     "sandboxID": "sb-1",
-                    "envdUrl": "https://hermes-gateway.sandbox.cloud.vtrix.ai",
+                    "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                     "envdAccessToken": "unit-runtime-auth",
                 }))
             self.fail("unexpected request")
@@ -82,7 +82,7 @@ class ClientUnitTest(unittest.TestCase):
         client = MockClient(handler)
         response = client.create_sandbox({"templateID": "tpl", "waitReady": True})
         self.assertEqual(response["sandboxID"], "sb-1")
-        self.assertEqual(response.runtime.base_url, "https://hermes-gateway.sandbox.cloud.vtrix.ai")
+        self.assertEqual(response.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
 
     def test_build_namespace_reuses_gateway_configuration(self) -> None:
         def handler(request):
@@ -157,7 +157,7 @@ class ClientUnitTest(unittest.TestCase):
                 return FakeResponse(200, json.dumps({"logs": []}))
             return FakeResponse(200, json.dumps({
                 "sandboxID": "sb-1",
-                "envdUrl": "https://hermes-gateway.sandbox.cloud.vtrix.ai",
+                "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                 "envdAccessToken": "unit-runtime-auth",
             }))
 
@@ -166,7 +166,7 @@ class ClientUnitTest(unittest.TestCase):
         self.assertEqual(listed[0]["sandboxID"], "sb-1")
         detail = listed[0].reload()
         listed[0].logs()
-        self.assertEqual(detail.runtime.base_url, "https://hermes-gateway.sandbox.cloud.vtrix.ai")
+        self.assertEqual(detail.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
         self.assertTrue(seen[1].endswith("/api/v1/sandboxes/sb-1"))
         self.assertTrue(seen[2].endswith("/api/v1/sandboxes/sb-1/logs"))
 
@@ -185,14 +185,14 @@ class ClientUnitTest(unittest.TestCase):
             if request.full_url.endswith("/connect"):
                 return FakeResponse(201, json.dumps({
                     "sandboxID": "sb-1",
-                    "envdUrl": "https://hermes-gateway.sandbox.cloud.vtrix.ai",
+                    "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                     "envdAccessToken": "unit-runtime-auth",
                 }))
             if request.get_method() == "DELETE" or request.full_url.endswith("/pause") or request.full_url.endswith("/timeout") or request.full_url.endswith("/refreshes"):
                 return FakeResponse(204, "")
             return FakeResponse(200, json.dumps({
                 "sandboxID": "sb-1",
-                "envdUrl": "https://hermes-gateway.sandbox.cloud.vtrix.ai",
+                "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                 "envdAccessToken": "unit-runtime-auth",
                 "logs": [],
             }))
@@ -207,7 +207,7 @@ class ClientUnitTest(unittest.TestCase):
         self.assertEqual(client.connect_sandbox("sb-1", {"timeout": 1200}).status_code, 201)
         client.delete_sandbox("sb-1")
 
-        self.assertEqual(calls[0][1], "https://hermes-gateway.sandbox.cloud.vtrix.ai/api/v1/sandboxes/sb-1")
+        self.assertEqual(calls[0][1], "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes/sb-1")
         self.assertEqual(calls[-1][0], "DELETE")
 
     def test_bound_sandbox_helpers_reuse_original_client(self) -> None:
@@ -218,14 +218,14 @@ class ClientUnitTest(unittest.TestCase):
             if request.full_url.endswith("/api/v1/sandboxes"):
                 return FakeResponse(201, json.dumps({
                     "sandboxID": "sb-1",
-                    "envdUrl": "https://hermes-gateway.sandbox.cloud.vtrix.ai",
+                    "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                     "envdAccessToken": "unit-runtime-auth",
                 }))
             if request.full_url.endswith("/logs"):
                 return FakeResponse(200, json.dumps({"logs": []}))
             return FakeResponse(200, json.dumps({
                 "sandboxID": "sb-1",
-                "envdUrl": "https://hermes-gateway.sandbox.cloud.vtrix.ai",
+                "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                 "envdAccessToken": "unit-runtime-auth",
             }))
 
@@ -302,10 +302,10 @@ class ClientUnitTest(unittest.TestCase):
     def test_runtime_from_sandbox_uses_envd_fields(self) -> None:
         client = MockClient(lambda request: FakeResponse(200, "{}"))
         runtime = client.runtime_from_sandbox({
-            "envdUrl": "https://hermes-gateway.sandbox.cloud.vtrix.ai",
+            "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
             "envdAccessToken": "unit-runtime-auth",
         })
-        self.assertEqual(runtime.base_url, "https://hermes-gateway.sandbox.cloud.vtrix.ai")
+        self.assertEqual(runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
         self.assertEqual(runtime.access_token, "unit-runtime-auth")
 
     def test_transport_timeout_raises_typed_error(self) -> None:
@@ -359,8 +359,8 @@ class ClientUnitTest(unittest.TestCase):
             cmd.write_file(UploadBytesRequest(path="", data=b""))
 
     def test_cmd_base_url_prefix_is_preserved(self) -> None:
-        cmd = CommandService(base_url="https://hermes-gateway.sandbox.cloud.vtrix.ai/sandbox/sb-1", access_token="unit-runtime-auth")
-        self.assertEqual(cmd._build_url("/run"), "https://hermes-gateway.sandbox.cloud.vtrix.ai/sandbox/sb-1/run")
+        cmd = CommandService(base_url="https://sandbox-gateway.cloud.seaart.ai/sandbox/sb-1", access_token="unit-runtime-auth")
+        self.assertEqual(cmd._build_url("/run"), "https://sandbox-gateway.cloud.seaart.ai/sandbox/sb-1/run")
 
 
 def connect_frame(payload: dict[str, object]) -> bytes:

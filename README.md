@@ -37,7 +37,7 @@ import os
 from sandbox import Client
 
 client = Client(
-    base_url="https://hermes-gateway.sandbox.cloud.vtrix.ai",
+    base_url="https://sandbox-gateway.cloud.seaart.ai",
     api_key=os.environ["SEACLOUD_API_KEY"],
     timeout=180,
 )
@@ -72,7 +72,7 @@ import os
 from sandbox import Client
 
 client = Client(
-    base_url="https://hermes-gateway.sandbox.cloud.vtrix.ai",
+    base_url="https://sandbox-gateway.cloud.seaart.ai",
     api_key=os.environ["SEACLOUD_API_KEY"],
 )
 
@@ -94,7 +94,7 @@ from sandbox import Client
 from sandbox.cmd import FileRequest, UploadBytesRequest
 
 client = Client(
-    base_url="https://hermes-gateway.sandbox.cloud.vtrix.ai",
+    base_url="https://sandbox-gateway.cloud.seaart.ai",
     api_key=os.environ["SEACLOUD_API_KEY"],
 )
 
@@ -207,7 +207,7 @@ Use production smoke tests only with explicitly provided credentials and disposa
 
 ```bash
 SANDBOX_RUN_INTEGRATION=1 \
-SANDBOX_TEST_BASE_URL=https://hermes-gateway.sandbox.cloud.vtrix.ai \
+SANDBOX_TEST_BASE_URL=https://sandbox-gateway.cloud.seaart.ai \
 SANDBOX_TEST_API_KEY=... \
 SANDBOX_TEST_TEMPLATE_ID=tpl-base-dc11799b9f9f4f9e \
 PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
@@ -219,7 +219,7 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 
 ```bash
 SANDBOX_RUN_INTEGRATION=1 \
-SANDBOX_TEST_BASE_URL=https://hermes-gateway.sandbox.cloud.vtrix.ai \
+SANDBOX_TEST_BASE_URL=https://sandbox-gateway.cloud.seaart.ai \
 SANDBOX_TEST_API_KEY=... \
 SANDBOX_TEST_TEMPLATE_ID=... \
 PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v

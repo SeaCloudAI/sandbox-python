@@ -41,7 +41,7 @@ class FakeResponse:
 
 class MockBuildService(BuildService):
     def __init__(self, handler) -> None:
-        super().__init__(base_url="https://hermes-gateway.sandbox.cloud.vtrix.ai", api_key="unit-auth-value")
+        super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         self._handler = handler
 
     def open(self, request):
@@ -54,7 +54,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         self.assertEqual(service.metrics(), "metric 1\n")
 
         def direct_handler(request):
-            self.assertEqual(request.full_url, "https://hermes-gateway.sandbox.cloud.vtrix.ai/build")
+            self.assertEqual(request.full_url, "https://sandbox-gateway.cloud.seaart.ai/build")
             self.assertIsNone(request.get_header("X-Namespace-ID"))
             self.assertEqual(request.get_header("Content-type"), "application/json")
             self.assertEqual(json.loads(request.data.decode("utf-8")), {
@@ -213,7 +213,7 @@ class BuildServiceUnitTest(unittest.TestCase):
                 })
                 return FakeResponse(202, "{}")
             if request.full_url.endswith("/api/v1/templates/tpl-1/files/" + "a" * 64):
-                return FakeResponse(200, json.dumps({"present": False, "url": "https://hermes-gateway.sandbox.cloud.vtrix.ai"}))
+                return FakeResponse(200, json.dumps({"present": False, "url": "https://sandbox-gateway.cloud.seaart.ai"}))
             if request.full_url.endswith("/api/v1/templates/tpl-1/files/" + "b" * 64):
                 return FakeResponse(200, json.dumps({"present": True}))
             if request.full_url.endswith("/rollback"):
