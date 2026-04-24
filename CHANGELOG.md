@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 This project follows Semantic Versioning for public SDK APIs.
 
+## [0.1.2] - 2026-04-24
+
+### Changed
+
+- Refined README and examples around the unified gateway flow and environment-based configuration.
+- Added a full end-to-end workflow example covering template creation, sandbox startup, runtime execution, and cleanup.
+- Reduced build request surface to the user-facing fields needed for production SDK usage.
+
 ## [0.1.1] - 2026-04-24
 
 ### Changed
