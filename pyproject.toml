@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "seacloudai-sandbox"
+name = "seacloud-sandbox"
 version = "0.1.0"
 description = "SeaCloudAI sandbox SDK for control-plane, build-plane, and runtime CMD APIs."
 readme = "README.md"

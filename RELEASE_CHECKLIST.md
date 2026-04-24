@@ -24,5 +24,9 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 
 - Update `pyproject.toml` version and `CHANGELOG.md`.
 - Build with `python -m build`.
-- Upload with `python -m twine upload dist/*`.
+- For GitHub Actions publishing, configure a PyPI Trusted Publisher for `SeaCloudAI/sandbox-python` and this workflow file: `.github/workflows/publish.yml`.
+  Repository: `SeaCloudAI/sandbox-python`
+  Workflow: `publish.yml`
+  Environment: `pypi`
+- Manual fallback: upload with `python -m twine upload dist/*`.
 - Create and push a signed tag, for example `git tag -s v0.1.0 -m "v0.1.0"`.

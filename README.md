@@ -5,7 +5,7 @@ Python SDK for Sandbox control-plane, build-plane, and nano-executor CMD APIs.
 ## Install
 
 ```bash
-pip install seacloudai-sandbox
+pip install seacloud-sandbox
 ```
 
 ## Client Initialization
@@ -231,3 +231,4 @@ Use a runtime-enabled template for CMD integration coverage. For SeaCloudAI prod
 
 - See `CHANGELOG.md` for release notes.
 - See `RELEASE_CHECKLIST.md` before tagging or publishing a new version.
+- GitHub Actions can publish to PyPI through Trusted Publishing with `.github/workflows/publish.yml`.
