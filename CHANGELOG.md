@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 This project follows Semantic Versioning for public SDK APIs.
 
+## [0.1.3] - 2026-04-25
+
+### Fixed
+
+- Included the `sandbox.build` package in the published source tree and wheel.
+- Fixed Python CI by ensuring the build package is present in git and tightening workflow test setup.
+
 ## [0.1.2] - 2026-04-24
 
 ### Changed
