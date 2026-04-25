@@ -8,6 +8,8 @@ Python SDK for Sandbox control-plane, build-plane, and nano-executor CMD APIs.
 pip install seacloud-sandbox
 ```
 
+If you previously installed `0.1.2`, upgrade to `0.1.3` or later. `0.1.2` shipped without the `sandbox.build` package in the published artifact.
+
 ## Client Initialization
 
 - unified gateway client: `Client(base_url=..., api_key=...)`
@@ -130,7 +132,7 @@ client = Client(
 )
 
 created = client.create_sandbox({
-    "templateID": os.environ["SANDBOX_EXAMPLE_TEMPLATE_ID"],
+    "templateID": os.environ["SEACLOUD_TEMPLATE_ID"],
     "waitReady": True,
 })
 
