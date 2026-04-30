@@ -12,9 +12,26 @@ from .sandbox import SandboxInstance
 
 
 class Client(ControlService):
-    def __init__(self, base_url: str, api_key: str, *, timeout: float = 30.0) -> None:
-        super().__init__(base_url=base_url, api_key=api_key, timeout=timeout)
-        self.build = BuildService(base_url=base_url, api_key=api_key, timeout=timeout)
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        *,
+        project_id: str = "",
+        timeout: float = 30.0,
+    ) -> None:
+        super().__init__(
+            base_url=base_url,
+            api_key=api_key,
+            project_id=project_id,
+            timeout=timeout,
+        )
+        self.build = BuildService(
+            base_url=base_url,
+            api_key=api_key,
+            project_id=project_id,
+            timeout=timeout,
+        )
 
     def cmd(self, *, base_url: str, access_token: str = "", timeout: float = 30.0) -> CommandService:
         return self.runtime(base_url=base_url, access_token=access_token, timeout=timeout)

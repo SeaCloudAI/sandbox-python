@@ -41,7 +41,11 @@ class FakeResponse:
 
 class MockClient(Client):
     def __init__(self, handler) -> None:
-        super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        super().__init__(
+            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            api_key="unit-auth-value",
+            project_id="project-1",
+        )
         self._handler = handler
         self.build.open = handler
 
@@ -71,6 +75,7 @@ class ClientUnitTest(unittest.TestCase):
             if request.full_url.endswith("/api/v1/sandboxes"):
                 self.assertEqual(request.get_method(), "POST")
                 self.assertEqual(request.get_header("Content-type"), "application/json")
+                self.assertEqual(request.get_header("X-project-id"), "project-1")
                 self.assertEqual(json.loads(request.data.decode("utf-8")), {"templateID": "tpl", "waitReady": True})
                 return FakeResponse(201, json.dumps({
                     "sandboxID": "sb-1",
@@ -88,9 +93,10 @@ class ClientUnitTest(unittest.TestCase):
         def handler(request):
             if request.full_url.endswith("/api/v1/templates"):
                 self.assertEqual(request.get_method(), "POST")
+                self.assertEqual(request.get_header("X-project-id"), "project-1")
                 self.assertEqual(
                     json.loads(request.data.decode("utf-8")),
-                    {"name": "demo", "image": "docker.io/library/alpine:3.20"},
+                    {"name": "demo", "teamID": "project-1", "cpuCount": 2, "memoryMB": 1024},
                 )
                 return FakeResponse(202, json.dumps({
                     "templateID": "tpl-1",
@@ -103,7 +109,7 @@ class ClientUnitTest(unittest.TestCase):
             self.fail("unexpected request")
 
         client = MockClient(handler)
-        response = client.build.create_template({"name": "demo", "image": "docker.io/library/alpine:3.20"})
+        response = client.build.create_template({"name": "demo", "teamID": "project-1", "cpuCount": 2, "memoryMB": 1024})
         self.assertEqual(response["templateID"], "tpl-1")
 
     def test_api_error_accepts_string_detail(self) -> None:

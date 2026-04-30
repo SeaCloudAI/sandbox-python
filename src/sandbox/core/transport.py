@@ -14,9 +14,17 @@ from .exceptions import APIError, ConfigurationError, RequestTimeoutError, creat
 class BaseTransport:
     """Shared HTTP transport for the Sandbox SDK."""
 
-    def __init__(self, base_url: str, api_key: str, *, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        *,
+        project_id: str = "",
+        timeout: float = 30.0,
+    ) -> None:
         normalized_base_url = base_url.strip().rstrip("/")
         normalized_api_key = api_key.strip()
+        normalized_project_id = project_id.strip()
 
         if not normalized_base_url:
             raise ConfigurationError("base_url is required")
@@ -31,6 +39,8 @@ class BaseTransport:
             "User-Agent": f"seacloudai-sandbox-python/{SDK_VERSION}",
             "X-API-Key": normalized_api_key,
         }
+        if normalized_project_id:
+            self._default_headers["X-Project-ID"] = normalized_project_id
 
     def build_url(self, path: str) -> str:
         normalized_path = path.strip() or "/"

@@ -6,34 +6,17 @@ from typing import TypedDict
 
 class TemplateCreateRequest(TypedDict, total=False):
     name: str
-    visibility: str
-    baseTemplateID: str
-    dockerfile: str
-    image: str
-    envs: dict[str, str]
+    tags: list[str]
+    alias: str
+    teamID: str
     cpuCount: int
     memoryMB: int
-    diskSizeMB: int
-    ttlSeconds: int
-    port: int
-    startCmd: str
-    readyCmd: str
+    extensions: dict[str, object]
 
 
 class TemplateUpdateRequest(TypedDict, total=False):
-    name: str
-    visibility: str
-    baseTemplateID: str
-    dockerfile: str
-    image: str
-    envs: dict[str, str]
-    cpuCount: int
-    memoryMB: int
-    diskSizeMB: int
-    ttlSeconds: int
-    port: int
-    startCmd: str
-    readyCmd: str
+    public: bool
+    extensions: dict[str, object]
 
 
 @dataclass

@@ -14,18 +14,28 @@ from .models import (
     TemplateUpdateRequest,
 )
 
-_TEMPLATE_REQUEST_FIELDS = {
+_TEMPLATE_CREATE_FIELDS = {
     "name",
-    "visibility",
-    "baseTemplateID",
-    "dockerfile",
-    "image",
-    "envs",
+    "tags",
+    "alias",
+    "teamID",
     "cpuCount",
     "memoryMB",
-    "diskSizeMB",
-    "ttlSeconds",
-    "port",
+    "extensions",
+}
+
+_TEMPLATE_UPDATE_FIELDS = {
+    "public",
+    "extensions",
+}
+
+_BUILD_REQUEST_FIELDS = {
+    "fromTemplate",
+    "fromImage",
+    "fromImageRegistry",
+    "force",
+    "steps",
+    "filesHash",
     "startCmd",
     "readyCmd",
 }
@@ -47,7 +57,7 @@ class BuildService(BaseTransport):
         self,
         body: TemplateCreateRequest | None = None,
     ) -> dict[str, Any]:
-        self._validate_template_body(body)
+        self._validate_template_create_body(body)
         return self._request_json(
             "POST",
             "/api/v1/templates",
@@ -69,6 +79,11 @@ class BuildService(BaseTransport):
             raise ValidationError("alias is required")
         return self._request_json("GET", f"/api/v1/templates/aliases/{quote(alias, safe='')}")
 
+    def resolve_template_ref(self, ref: str) -> dict[str, Any]:
+        if not ref.strip():
+            raise ValidationError("ref is required")
+        return self._request_json("GET", f"/api/v1/templates/resolve/{quote(ref, safe='')}")
+
     def get_template(
         self,
         template_id: str,
@@ -88,7 +103,7 @@ class BuildService(BaseTransport):
         body: TemplateUpdateRequest | None = None,
     ) -> dict[str, Any]:
         self._require_template_id(template_id)
-        self._validate_template_body(body)
+        self._validate_template_update_body(body)
         return self._request_json(
             "PATCH",
             f"/api/v1/templates/{quote(template_id, safe='')}",
@@ -107,20 +122,20 @@ class BuildService(BaseTransport):
     def create_build(
         self,
         template_id: str,
+        build_id: str,
         body: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         self._require_template_id(template_id)
+        self._require_build_id(build_id)
+        self._validate_client_build_id(build_id)
         self._validate_build_request(body)
-        response = self._request_json(
+        return self._request_json(
             "POST",
-            f"/api/v1/templates/{quote(template_id, safe='')}/builds",
+            f"/api/v1/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}",
             headers=None if body is None or self._is_empty_build_request(body) else self.build_headers({"Content-Type": "application/json"}),
             body=None if body is None or self._is_empty_build_request(body) else body,
             expected_statuses=(202,),
         )
-        result = dict(response)
-        result["empty"] = len(result) == 0
-        return result
 
     def get_build_file(self, template_id: str, hash_value: str) -> dict[str, Any]:
         self._require_template_id(template_id)
@@ -168,8 +183,7 @@ class BuildService(BaseTransport):
             f"/api/v1/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}/status",
             self._encode_build_status_params(params),
         )
-        raw = self._request_json("GET", path)
-        return self._normalize_build_status_response(raw)
+        return self._request_json("GET", path)
 
     def get_build_logs(
         self,
@@ -194,6 +208,11 @@ class BuildService(BaseTransport):
         if not build_id.strip():
             raise ValidationError("build_id is required")
 
+    def _validate_client_build_id(self, build_id: str) -> None:
+        trimmed = build_id.strip()
+        if len(trimmed) > 63 or not self._is_dns_label(trimmed):
+            raise ValidationError("build_id must be a lowercase DNS label up to 63 characters")
+
     def _require_hash(self, hash_value: str) -> None:
         if not hash_value.strip():
             raise ValidationError("hash is required")
@@ -214,52 +233,99 @@ class BuildService(BaseTransport):
         if params.limit is not None and (not isinstance(params.limit, int) or params.limit < 0 or params.limit > 100):
             raise ValidationError("template build history limit must be an integer between 0 and 100")
 
-    def _validate_template_body(self, body: Mapping[str, Any] | None) -> None:
+    def _validate_template_create_body(self, body: Mapping[str, Any] | None) -> None:
         if body is None:
             return
         for key in body.keys():
-            if key not in _TEMPLATE_REQUEST_FIELDS:
+            if key not in _TEMPLATE_CREATE_FIELDS:
                 raise ValidationError(f"template field {key} is not supported by the public SDK")
-        visibility = str(body.get("visibility", "")).strip().lower()
-        if visibility == "official":
-            raise ValidationError("official templates are not supported by the public SDK")
+        if body.get("extensions") is not None:
+            self._validate_template_extensions(body.get("extensions"))
+
+    def _validate_template_update_body(self, body: Mapping[str, Any] | None) -> None:
+        if body is None:
+            return
+        for key in body.keys():
+            if key not in _TEMPLATE_UPDATE_FIELDS:
+                raise ValidationError(f"template field {key} is not supported by the public SDK")
+        if body.get("extensions") is not None:
+            self._validate_template_extensions(body.get("extensions"))
 
     def _validate_build_request(self, body: Mapping[str, Any] | None) -> None:
         if body is None:
             return
-        build_id = str(body.get("buildID", "")).strip()
-        if build_id:
-            if len(build_id) > 63 or not self._is_dns_label(build_id):
-                raise ValidationError("buildID must be a lowercase DNS label up to 63 characters")
+        for key in body.keys():
+            if key not in _BUILD_REQUEST_FIELDS:
+                raise ValidationError(f"build field {key} is not supported by the public SDK")
+        if "buildID" in body:
+            raise ValidationError("buildID must be provided in the create_build path, not in body")
         files_hash = str(body.get("filesHash", "")).strip()
         if files_hash and not self._is_sha256(files_hash):
             raise ValidationError("filesHash must be a 64-character lowercase hex SHA256")
-        if str(body.get("fromImageRegistry", "")).strip():
-            raise ValidationError("fromImageRegistry is not supported yet")
-        if body.get("force") is not None:
-            raise ValidationError("force rebuild is not supported yet")
-
-        hashes: set[str] = set()
-        if files_hash:
-            hashes.add(files_hash)
+        if body.get("force") is not None and not isinstance(body.get("force"), bool):
+            raise ValidationError("force must be a boolean")
+        if body.get("fromImageRegistry") is not None:
+            self._validate_registry_config(body.get("fromImageRegistry"))
         for index, step in enumerate(body.get("steps") or []):
-            step_type = str(step.get("type", "")).strip()
+            step_type = str(step.get("type", "")).strip().upper()
             if not step_type:
                 raise ValidationError(f"steps[{index}].type is required")
-            if step_type not in {"files", "context"}:
-                raise ValidationError(f"steps[{index}].type must be files or context")
-            step_hash = str(step.get("filesHash", "")).strip()
-            if not step_hash:
-                raise ValidationError(f"steps[{index}].filesHash is required")
-            if not self._is_sha256(step_hash):
-                raise ValidationError(f"steps[{index}].filesHash must be a 64-character lowercase hex SHA256")
-            if step.get("args"):
-                raise ValidationError(f"steps[{index}].args is not supported yet")
-            if step.get("force") is not None:
-                raise ValidationError(f"steps[{index}].force is not supported yet")
-            hashes.add(step_hash)
-        if len(hashes) > 1:
-            raise ValidationError("multiple different filesHash values are not supported yet")
+            if step_type == "COPY":
+                step_hash = str(step.get("filesHash", "")).strip()
+                if not step_hash:
+                    raise ValidationError(f"steps[{index}].filesHash is required for COPY")
+                if not self._is_sha256(step_hash):
+                    raise ValidationError(f"steps[{index}].filesHash must be a 64-character lowercase hex SHA256")
+                if len(step.get("args") or []) < 2:
+                    raise ValidationError(f"steps[{index}].args must include src and dest for COPY")
+                continue
+            if step_type == "ENV":
+                if len(step.get("args") or []) == 0 or len(step.get("args") or []) % 2 != 0:
+                    raise ValidationError(f"steps[{index}].args must contain ENV key/value pairs")
+                continue
+            if step_type in {"RUN", "WORKDIR", "USER"}:
+                if not str((step.get("args") or [""])[0]).strip():
+                    raise ValidationError(f"steps[{index}].args must include the {step_type} value")
+                continue
+            raise ValidationError(f"steps[{index}].type must be one of COPY, ENV, RUN, WORKDIR, USER")
+
+    def _validate_registry_config(self, config) -> None:
+        if not isinstance(config, dict):
+            raise ValidationError("fromImageRegistry must be an object")
+        registry_type = str(config.get("type", "")).strip()
+        if not registry_type:
+            raise ValidationError("fromImageRegistry.type is required")
+        if registry_type == "registry":
+            if not str(config.get("username", "")).strip() or not str(config.get("password", "")).strip():
+                raise ValidationError("fromImageRegistry registry config requires username and password")
+            return
+        if registry_type == "aws":
+            if not str(config.get("awsAccessKeyId", "")).strip() or not str(config.get("awsSecretAccessKey", "")).strip() or not str(config.get("awsRegion", "")).strip():
+                raise ValidationError("fromImageRegistry aws config requires awsAccessKeyId, awsSecretAccessKey, and awsRegion")
+            return
+        if registry_type == "gcp":
+            if not str(config.get("serviceAccountJson", "")).strip():
+                raise ValidationError("fromImageRegistry gcp config requires serviceAccountJson")
+            return
+        raise ValidationError(f"fromImageRegistry.type {registry_type!r} is not supported")
+
+    def _validate_template_extensions(self, extensions) -> None:
+        if not isinstance(extensions, dict):
+            raise ValidationError("extensions must be an object")
+        for key in extensions.keys():
+            if key != "seacloud":
+                raise ValidationError(f"template extension {key} is not supported by the public SDK")
+        seacloud = extensions.get("seacloud")
+        if seacloud is None:
+            return
+        if not isinstance(seacloud, dict):
+            raise ValidationError("extensions.seacloud must be an object")
+        allowed = {"baseTemplateID", "visibility", "envs", "storageType", "storageSizeGB"}
+        for key in seacloud.keys():
+            if key not in allowed:
+                raise ValidationError(f"template extension field {key} is not supported by the public SDK")
+        if str(seacloud.get("visibility", "")).strip() == "official":
+            raise ValidationError("extensions.seacloud.visibility=official is not supported by the public SDK")
 
     def _validate_build_status_params(self, params: BuildStatusParams | None) -> None:
         if params is None:
@@ -333,38 +399,15 @@ class BuildService(BaseTransport):
             query["source"] = params.source
         return query
 
-    def _normalize_build_status_response(self, raw: Mapping[str, Any]) -> dict[str, Any]:
-        raw_logs = raw.get("logs") if isinstance(raw.get("logs"), list) else []
-        raw_log_entries = raw.get("logEntries") if isinstance(raw.get("logEntries"), list) else []
-        log_entries = raw_log_entries or [entry for entry in raw_logs if isinstance(entry, dict)]
-        return {
-            "buildID": str(raw.get("buildID", "")),
-            "templateID": str(raw.get("templateID", "")),
-            "status": str(raw.get("status", "")),
-            "logs": [entry for entry in raw_logs if isinstance(entry, str)],
-            "logEntries": [
-                {
-                    "timestamp": str(entry.get("timestamp", "")),
-                    "level": str(entry.get("level", "")),
-                    "step": str(entry.get("step", "")),
-                    "message": str(entry.get("message", "")),
-                }
-                for entry in log_entries
-            ],
-            "reason": raw.get("reason"),
-            "createdAt": str(raw.get("createdAt", "")),
-            "updatedAt": str(raw.get("updatedAt", "")),
-        }
-
     def _with_query(self, path: str, params: Mapping[str, Any]) -> str:
         if not params:
             return path
         return f"{path}?{urlencode(params, doseq=True)}"
 
     def _is_empty_build_request(self, body: Mapping[str, Any]) -> bool:
-        return not str(body.get("buildID", "")).strip() and not str(body.get("fromTemplate", "")).strip() and not str(
+        return not str(body.get("fromTemplate", "")).strip() and not str(
             body.get("fromImage", "")
-        ).strip() and not str(body.get("fromImageRegistry", "")).strip() and body.get("force") is None and not (
+        ).strip() and body.get("fromImageRegistry") is None and body.get("force") is None and not (
             body.get("steps") or []
         ) and not str(body.get("filesHash", "")).strip() and not str(body.get("startCmd", "")).strip() and not str(
             body.get("readyCmd", "")

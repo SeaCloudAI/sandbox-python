@@ -17,6 +17,7 @@ def _bootstrap_local_src() -> None:
 _bootstrap_local_src()
 
 from sandbox import Client
+from sandbox.build import template_build
 from sandbox.build.models import BuildLogsParams, BuildStatusParams
 from sandbox.control.models import SandboxLogsParams
 
@@ -39,8 +40,6 @@ def main() -> None:
     template_name = f"python-full-workflow-{time.time_ns()}"
     created_template = client.build.create_template({
         "name": template_name,
-        "visibility": "personal",
-        "dockerfile": dockerfile(runtime_base_image),
     })
     template_id = created_template["templateID"]
     build_id = created_template.get("buildID", "")
@@ -49,7 +48,16 @@ def main() -> None:
     created_sandbox = None
     try:
         if not build_id:
-            build_id = client.build.get_template(template_id).get("buildID", "")
+            requested_build_id = f"build-{time.time_ns():x}"[:32]
+            client.build.create_build(
+                template_id,
+                requested_build_id,
+                template_build()
+                .from_image(runtime_base_image)
+                .run("mkdir -p /workspace && printf 'hello from python full workflow\\n' >/workspace/built-by-template.txt")
+                .to_request(),
+            )
+            build_id = requested_build_id
         if not build_id:
             raise RuntimeError("buildID is empty")
 
@@ -76,9 +84,9 @@ def main() -> None:
         template_detail = client.build.get_template(template_id)
         print(
             "template detail:",
-            template_detail.get("name"),
-            template_detail.get("imageSource"),
-            template_detail.get("buildStatus"),
+            template_detail.get("templateID"),
+            len(template_detail.get("builds", [])),
+            template_detail.get("extensions", {}).get("seacloud", {}).get("imageSource"),
         )
 
         created_sandbox = client.create_sandbox({
@@ -152,13 +160,6 @@ def must_env(name: str) -> str:
 
 def env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
-
-
-def dockerfile(runtime_base_image: str) -> str:
-    return (
-        f"FROM {runtime_base_image}\n"
-        "RUN mkdir -p /workspace && printf 'hello from python full workflow\\n' >/workspace/built-by-template.txt\n"
-    )
 
 
 def first_non_empty_line(text: str) -> str:

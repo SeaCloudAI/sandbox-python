@@ -1,3 +1,4 @@
+from .builder import TemplateBuildBuilder, template_build
 from .service import BuildService
 from .models import (
     BuildLogsParams,
@@ -14,6 +15,8 @@ __all__ = [
     "BuildService",
     "GetTemplateParams",
     "ListTemplatesParams",
+    "TemplateBuildBuilder",
     "TemplateCreateRequest",
     "TemplateUpdateRequest",
+    "template_build",
 ]

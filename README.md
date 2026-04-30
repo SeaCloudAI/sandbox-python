@@ -12,11 +12,11 @@ If you previously installed `0.1.2`, upgrade to `0.1.3` or later. `0.1.2` shippe
 
 ## Client Initialization
 
-- unified gateway client: `Client(base_url=..., api_key=...)`
+- unified gateway client: `Client(base_url=..., api_key=..., project_id="")`
 - build plane via root client: `client.build`
 - runtime helper: `sandbox.runtime` or `client.runtime_from_sandbox(sandbox)`
 
-`control` and `build` talk to the gateway. Runtime access is derived from sandbox create/detail/connect responses; callers should not hardcode runtime endpoints or tokens.
+`control` and `build` talk to the gateway. Runtime access is derived from sandbox create/detail/connect responses; callers should not hardcode runtime endpoints or tokens. `project_id` is an optional gateway routing header for project-scoped deployments.
 
 ## Environment
 
@@ -24,6 +24,7 @@ Use environment variables for gateway configuration in all examples and quick st
 
 - `SEACLOUD_BASE_URL`: SeaCloudAI gateway entrypoint
 - `SEACLOUD_API_KEY`: API key used for gateway routing and authentication
+- `SEACLOUD_PROJECT_ID`: optional project routing key for project-scoped gateways
 - `SEACLOUD_TEMPLATE_ID`: sandbox template identifier or official template type for your target environment
 
 Set them once in your shell:
@@ -31,6 +32,7 @@ Set them once in your shell:
 ```bash
 export SEACLOUD_BASE_URL="https://sandbox-gateway.cloud.seaart.ai"
 export SEACLOUD_API_KEY="..."
+export SEACLOUD_PROJECT_ID="project-..."
 export SEACLOUD_TEMPLATE_ID="tpl-..."
 ```
 
@@ -70,6 +72,7 @@ from sandbox import Client
 client = Client(
     base_url=os.environ["SEACLOUD_BASE_URL"],
     api_key=os.environ["SEACLOUD_API_KEY"],
+    project_id=os.getenv("SEACLOUD_PROJECT_ID", ""),
     timeout=180,
 )
 
@@ -102,18 +105,28 @@ for sandbox in listed:
 import os
 
 from sandbox import Client
+from sandbox.build import template_build
 
 client = Client(
     base_url=os.environ["SEACLOUD_BASE_URL"],
     api_key=os.environ["SEACLOUD_API_KEY"],
+    project_id=os.getenv("SEACLOUD_PROJECT_ID", ""),
 )
 
 template = client.build.create_template({
     "name": "demo",
-    "image": "docker.io/library/alpine:3.20",
 })
 try:
-    print(template["templateID"], template["buildID"])
+    build_id = "build-demo"
+    client.build.create_build(
+        template["templateID"],
+        build_id,
+        template_build()
+        .from_image("docker.io/library/alpine:3.20")
+        .run("echo hello-from-python >/tmp/hello.txt")
+        .to_request(),
+    )
+    print(template["templateID"], build_id)
 finally:
     client.build.delete_template(template["templateID"])
 ```
@@ -154,11 +167,12 @@ finally:
 
 For most integrations, stay on the root client as long as possible:
 
-- initialize once with `Client(base_url=..., api_key=...)`
+- initialize once with `Client(base_url=..., api_key=..., project_id="")`
 - use `create_sandbox`, `list_sandboxes`, `get_sandbox`, `connect_sandbox`
 - continue from the returned sandbox object with `reload()`, `logs()`, `pause()`, `refresh()`, `set_timeout()`, `connect()`, `delete()`
 - only switch to runtime with `runtime` when you need file/process/stream operations
 - use `client.build` only for template/build workflows
+- use `template_build()` when you want a small fluent helper that expands into the public build request payload
 
 Low-level submodules remain available when you want direct stateless calls or need request/response models explicitly.
 
@@ -192,14 +206,18 @@ These routes are intended for platform operators, not normal application workloa
 
 - system: `metrics`
 - direct build: `direct_build`
-- templates: `create_template`, `list_templates`, `get_template_by_alias`, `get_template`, `update_template`, `delete_template`
+- templates: `create_template`, `list_templates`, `get_template_by_alias`, `resolve_template_ref`, `get_template`, `update_template`, `delete_template`
 - builds: `create_build`, `get_build_file`, `rollback_template`, `list_builds`, `get_build`, `get_build_status`, `get_build_logs`
 
-The public template request surface intentionally stays small: `name`, `image` or `dockerfile`, and a few optional runtime settings such as `visibility`, `baseTemplateID`, `envs`, `cpuCount`, `memoryMB`, `diskSizeMB`, `ttlSeconds`, `port`, `startCmd`, `readyCmd`.
+The public template contract is split into three layers: E2B core top-level fields (`name`, `tags`, `alias`, `teamID`, `cpuCount`, `memoryMB`), SeaCloud template extensions under `extensions.seacloud` (`baseTemplateID`, `visibility`, `envs`, `storageType`, `storageSizeGB`), and build-only fields on `create_build` (`fromImage`, `fromTemplate`, `steps`, `startCmd`, `readyCmd`, registry credentials, `filesHash`).
 
-`create_template` and `update_template` reject `visibility="official"` in the public SDK.
+`create_template` and `update_template` reject `visibility="official"` on public routes, including `extensions.seacloud.visibility == "official"`.
 
-`get_template_by_alias` is a stable-ref lookup endpoint. It resolves a template by `templateID` or by an official template `type`; it should not be treated as a personal/team display-name search API.
+`create_build` now follows the wire contract directly: callers pass top-level `filesHash` when needed, and the SDK returns the raw `202 {}` trigger response without adding helper fields.
+
+`get_template_by_alias` is a pure alias lookup endpoint. It should only be used with an actual published alias value.
+
+`resolve_template_ref` is the SeaCloud stable-ref lookup endpoint. It resolves a template by `templateID`, official template `type`, or visible alias.
 
 ## Resource Safety
 
@@ -233,7 +251,7 @@ Useful CMD helpers:
 
 ## Notes
 
-- The gateway entrypoint only needs `base_url + api_key`.
+- The gateway entrypoint always needs `base_url + api_key`; project-scoped deployments can additionally set `project_id`.
 - Runtime access should be derived from sandbox response objects with `sandbox.runtime` or `runtime_from_sandbox(...)`.
 - `create_sandbox` and `get_sandbox` return `envdUrl` and `envdAccessToken` when nano-executor access is enabled.
 - Runtime file/process APIs require a template image that starts nano-executor and returns runtime access fields; if runtime APIs return `404`, verify the selected template supports CMD runtime routes.
@@ -241,15 +259,15 @@ Useful CMD helpers:
 - `waitReady=True` can take longer than the default timeout in production; pass `timeout=...` to `Client(...)` for long-wait workflows.
 - HTTP errors are classified into typed exceptions such as `NotFoundError`, `RateLimitError`, and `ServerError`. Transport timeouts raise `RequestTimeoutError`.
 - Sandbox timeout is validated to `0..86400`; refresh duration to `0..3600`.
-- Build validation currently rejects unsupported `fromImageRegistry`, `force`, and per-step `args`/`force`.
+- Build validation accepts E2B-style `COPY` / `ENV` / `RUN` / `WORKDIR` / `USER` steps, `force`, and structured `fromImageRegistry` credentials (`registry` / `aws` / `gcp`).
 - Some gateways do not expose `/admin/*` or `/build`; integration tests skip those cases on `404`.
 
 ## Security
 
 - Do not commit `SEACLOUD_API_KEY`, `envdAccessToken`, or sandbox access tokens.
 - Treat runtime tokens as sandbox-scoped secrets. Prefer `sandbox.runtime` or `client.runtime_from_sandbox(...)` so response-scoped runtime access is not copied into configuration.
-- Do not log raw API keys or runtime tokens. SDK exceptions may include response bodies, so avoid logging full error payloads in multi-tenant systems.
-- The SDK does not construct tenant routing headers. Gateway routing context is derived from the API key.
+- Do not log raw API keys or runtime tokens. SDK exceptions may include response bodies, so avoid logging full error payloads in shared systems.
+- Set `project_id` in `Client(...)` when your gateway requires explicit project routing. The SDK sends it as `X-Project-ID`.
 
 ## Production Smoke
 

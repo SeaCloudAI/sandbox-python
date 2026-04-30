@@ -61,26 +61,36 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
 
     def test_template_lifecycle(self) -> None:
         name = f"python-build-sdk-{time.time_ns()}"
+        alias = name
         created = self.service.create_template({
             "name": name,
-            "visibility": "personal",
-            "image": self.build_image,
+            "alias": alias,
         })
         template_id = created["templateID"]
         build_id = created.get("buildID", "")
         self.assertTrue(template_id)
 
+        if not build_id:
+            requested_build_id = f"build-{time.time_ns():x}"[:32]
+            build_resp = self.service.create_build(template_id, requested_build_id, {"fromImage": self.build_image})
+            self.assertEqual(build_resp, {})
+            build_id = requested_build_id
+
         try:
             listed = self.service.list_templates(None)
             self.assertIsInstance(listed, list)
 
-            aliased = self.service.get_template_by_alias(template_id)
+            aliased = self.service.get_template_by_alias(alias)
             self.assertEqual(aliased["templateID"], template_id)
+
+            resolved = self.service.resolve_template_ref(template_id)
+            self.assertEqual(resolved["templateID"], template_id)
 
             detail = self.service.get_template(template_id)
             self.assertEqual(detail["templateID"], template_id)
+            self.assertIsInstance(detail.get("builds", []), list)
 
-            updated = self.service.update_template(template_id, {"name": f"{name}-updated"})
+            updated = self.service.update_template(template_id, {"public": False})
             self.assertTrue(updated["names"])
 
             file_resp = self.service.get_build_file(template_id, "a" * 64)
