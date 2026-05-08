@@ -33,27 +33,19 @@ def main() -> None:
 
     keep_resources = os.getenv("SANDBOX_EXAMPLE_KEEP_RESOURCES", "").strip().lower() in {"1", "true", "yes"}
 
-    client = Client(
-        base_url=base_url,
-        api_key=api_key,
-    )
-
-    created = client.create_sandbox({
-        "templateID": template_id,
-        "timeout": 1800,
-        "waitReady": True,
-    })
-    print("created sandbox:", created["sandboxID"], created["status"], created.get("envdUrl"))
-    if created.get("envdUrl"):
-        print("bound runtime base_url:", created.runtime.base_url)
+    client = Client(base_url=base_url, api_key=api_key)
+    created = client.create(template_id, timeout=1800, waitReady=True)
+    print("created sandbox:", created.sandbox_id, created.raw.get("status"), created.raw.get("envdUrl"))
+    if created.sandbox_domain:
+        print("sandbox domain:", created.sandbox_domain)
 
     try:
-        detail = created.reload()
-        print("sandbox detail:", detail["sandboxID"], detail.get("state"), detail["status"])
+        created.reload()
+        print("sandbox detail:", created.sandbox_id, created.raw.get("state"), created.raw.get("status"))
     finally:
         if not keep_resources:
             created.delete()
-            print("deleted sandbox:", created["sandboxID"])
+            print("deleted sandbox:", created.sandbox_id)
 
 
 if __name__ == "__main__":

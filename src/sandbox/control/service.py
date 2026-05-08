@@ -11,8 +11,6 @@ from .models import ConnectSandboxResponse, ListSandboxesParams, SandboxLogsPara
 
 class ControlService(BaseTransport):
     def create_sandbox(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        if not str(body.get("templateID", "")).strip():
-            raise ValidationError("templateID is required")
         return self._request_json(
             "POST",
             "/api/v1/sandboxes",

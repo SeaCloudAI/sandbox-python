@@ -16,7 +16,6 @@ def _bootstrap_local_src() -> None:
 _bootstrap_local_src()
 
 from sandbox import Client
-from sandbox.cmd import FileRequest, UploadBytesRequest
 
 
 def main() -> None:
@@ -33,36 +32,23 @@ def main() -> None:
         raise RuntimeError("SANDBOX_EXAMPLE_TEMPLATE_ID is required")
 
     keep_resources = os.getenv("SANDBOX_EXAMPLE_KEEP_RESOURCES", "").strip().lower() in {"1", "true", "yes"}
-    root = "/tmp"
+    root = "/root/workspace"
 
-    client = Client(
-        base_url=base_url,
-        api_key=api_key,
-    )
-
-    created = client.create_sandbox({
-        "templateID": template_id,
-        "timeout": 1800,
-        "waitReady": True,
-    })
+    client = Client(base_url=base_url, api_key=api_key)
+    created = client.create(template_id, timeout=1800, waitReady=True)
 
     try:
-        runtime = created.runtime
         file_path = f"{root}/python-cmd-example.txt"
 
-        runtime.write_file(UploadBytesRequest(path=file_path, data=b"hello from python example"))
+        created.files.write(file_path, b"hello from python example")
 
-        with runtime.read_file(FileRequest(path=file_path)) as response:
-            print("file content:", response.read().decode("utf-8"))
+        print("file content:", created.files.read(file_path))
 
-        listing = runtime.list_dir({"path": root})
-        print("directory entries:", len(listing["entries"]))
+        listing = created.files.list(root)
+        print("directory entries:", len(listing))
 
-        run = runtime.run({
-            "cmd": "sh",
-            "args": ["-lc", f"cat {file_path}"],
-        })
-        print("run result:", run["exit_code"], repr(run["stdout"]))
+        run = created.commands.run("sh", args=["-lc", f"cat {file_path}"])
+        print("run result:", run["exitCode"], repr(run["stdout"]))
 
     finally:
         if not keep_resources:

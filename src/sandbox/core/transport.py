@@ -144,6 +144,8 @@ class BaseTransport:
         expected_statuses: tuple[int, ...] = (200,),
     ):
         payload = None if body is None else json.dumps(body).encode("utf-8")
+        if payload is None and method.upper() in {"POST", "PUT", "PATCH"}:
+            payload = b""
         request = self.build_request(method, path, headers=headers, data=payload)
         try:
             response = self.open(request)

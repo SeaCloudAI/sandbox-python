@@ -138,9 +138,7 @@ class BuildServiceUnitTest(unittest.TestCase):
                 self.assertEqual(request.get_header("X-project-id"), "project-1")
                 self.assertEqual(json.loads(request.data.decode("utf-8")), {
                     "name": "demo",
-                    "alias": "demo-alias",
                     "tags": ["v1"],
-                    "teamID": "project-1",
                     "cpuCount": 2,
                     "memoryMB": 1024,
                 })
@@ -190,9 +188,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         service = MockBuildService(handler)
         created = service.create_template({
             "name": "demo",
-            "alias": "demo-alias",
             "tags": ["v1"],
-            "teamID": "project-1",
             "cpuCount": 2,
             "memoryMB": 1024,
         })
@@ -208,7 +204,9 @@ class BuildServiceUnitTest(unittest.TestCase):
             "tpl-1",
             GetTemplateParams(limit=10, next_token="build-1"),
         )
-        updated = service.update_template("tpl-1", {"public": False})
+        updated = service.update_template("tpl-1", {
+            "extensions": {"seacloud": {"envs": {"SDK_TEST": "1"}}},
+        })
         service.delete_template("tpl-1")
 
         self.assertEqual(created["templateID"], "tpl-1")
@@ -430,3 +428,92 @@ class BuildServiceUnitTest(unittest.TestCase):
         with self.assertRaises(APIError) as ctx:
             error_client.get_build_file("tpl-1", "a" * 64)
         self.assertEqual(ctx.exception.request_id, "req-build-1")
+
+    def test_boundary_values_are_accepted(self) -> None:
+        calls = []
+        build_id = "build-".ljust(63, "a")
+
+        def handler(request):
+            calls.append(request.full_url)
+            if request.full_url.endswith("/api/v1/templates/aliases/demo"):
+                return FakeResponse(200, json.dumps({"templateID": "tpl-1"}))
+            if request.full_url.endswith("/api/v1/templates/resolve/base"):
+                return FakeResponse(200, json.dumps({"templateID": "tpl-base"}))
+            if request.full_url.startswith("https://sandbox-gateway.cloud.seaart.ai/api/v1/templates?"):
+                return FakeResponse(200, json.dumps([]))
+            if request.full_url.startswith("https://sandbox-gateway.cloud.seaart.ai/api/v1/templates/tpl-1?"):
+                return FakeResponse(200, json.dumps({"templateID": "tpl-1"}))
+            if request.full_url.endswith("/api/v1/templates/tpl-1"):
+                return FakeResponse(200, json.dumps({"templateID": "tpl-1"}))
+            if request.full_url.endswith("/status?logsOffset=0&limit=100"):
+                return FakeResponse(200, json.dumps({"buildID": "b", "templateID": "tpl-1", "status": "building", "logs": [], "logEntries": []}))
+            if request.full_url.endswith("/logs?cursor=0&limit=100&direction=backward&source=temporary"):
+                return FakeResponse(200, json.dumps({"logs": []}))
+            if "/files/" in request.full_url:
+                return FakeResponse(200, json.dumps({"present": True}))
+            if request.full_url.endswith(f"/api/v1/templates/tpl-1/builds/{build_id}") and request.get_method() == "POST":
+                return FakeResponse(202, "{}")
+            self.fail(f"unexpected request: {request.get_method()} {request.full_url}")
+
+        service = MockBuildService(handler)
+        service.list_templates(ListTemplatesParams(limit=100, offset=0))
+        service.get_template_by_alias("demo")
+        service.resolve_template_ref("base")
+        service.get_template("tpl-1", GetTemplateParams(limit=100, next_token=""))
+        service.create_build("tpl-1", build_id)
+        service.get_build_status("tpl-1", "build-1", BuildStatusParams(logs_offset=0, limit=100))
+        service.get_build_logs("tpl-1", "build-1", BuildLogsParams(cursor=0, limit=100, direction="backward", source="temporary"))
+        service.get_build_file("tpl-1", "a" * 64)
+        self.assertEqual(len(calls), 8)
+
+    def test_empty_identifiers_are_rejected(self) -> None:
+        service = MockBuildService(lambda request: FakeResponse(200, "{}"))
+
+        with self.assertRaises(ValidationError):
+            service.get_template(" ")
+        with self.assertRaises(ValidationError):
+            service.update_template(" ", {})
+        with self.assertRaises(ValidationError):
+            service.delete_template(" ")
+        with self.assertRaises(ValidationError):
+            service.get_template_by_alias(" ")
+        with self.assertRaises(ValidationError):
+            service.resolve_template_ref(" ")
+        with self.assertRaises(ValidationError):
+            service.create_build(" ", "build-1")
+        with self.assertRaises(ValidationError):
+            service.create_build("tpl-1", " ")
+        with self.assertRaises(ValidationError):
+            service.get_build(" ", "build-1")
+        with self.assertRaises(ValidationError):
+            service.get_build("tpl-1", " ")
+        with self.assertRaises(ValidationError):
+            service.get_build_status(" ", "build-1")
+        with self.assertRaises(ValidationError):
+            service.get_build_logs("tpl-1", " ")
+        with self.assertRaises(ValidationError):
+            service.list_builds(" ")
+        with self.assertRaises(ValidationError):
+            service.get_build_file(" ", "a" * 64)
+        with self.assertRaises(ValidationError):
+            service.get_build_file("tpl-1", " ")
+        with self.assertRaises(ValidationError):
+            service.rollback_template(" ", {"buildID": "build-1"})
+
+    def test_create_template_compacts_none_values(self) -> None:
+        def handler(request):
+            if request.full_url.endswith("/api/v1/templates") and request.get_method() == "POST":
+                self.assertEqual(json.loads(request.data.decode("utf-8")), {
+                    "name": "demo",
+                    "extensions": {"seacloud": {"baseTemplateID": "tpl-base-1"}},
+                })
+                return FakeResponse(202, json.dumps({"templateID": "tpl-1"}))
+            self.fail(f"unexpected request: {request.get_method()} {request.full_url}")
+
+        service = MockBuildService(handler)
+        service.create_template({
+            "name": "demo",
+            "cpuCount": None,
+            "memoryMB": None,
+            "extensions": {"seacloud": {"baseTemplateID": "tpl-base-1", "visibility": None}},
+        })

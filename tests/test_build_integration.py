@@ -61,10 +61,8 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
 
     def test_template_lifecycle(self) -> None:
         name = f"python-build-sdk-{time.time_ns()}"
-        alias = name
         created = self.service.create_template({
             "name": name,
-            "alias": alias,
         })
         template_id = created["templateID"]
         build_id = created.get("buildID", "")
@@ -80,7 +78,7 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
             listed = self.service.list_templates(None)
             self.assertIsInstance(listed, list)
 
-            aliased = self.service.get_template_by_alias(alias)
+            aliased = self.service.get_template_by_alias(name)
             self.assertEqual(aliased["templateID"], template_id)
 
             resolved = self.service.resolve_template_ref(template_id)
@@ -90,7 +88,9 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
             self.assertEqual(detail["templateID"], template_id)
             self.assertIsInstance(detail.get("builds", []), list)
 
-            updated = self.service.update_template(template_id, {"public": False})
+            updated = self.service.update_template(template_id, {
+                "extensions": {"seacloud": {"envs": {"SDK_TEST": "1"}}},
+            })
             self.assertTrue(updated["names"])
 
             file_resp = self.service.get_build_file(template_id, "a" * 64)

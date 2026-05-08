@@ -16,9 +16,7 @@ def _bootstrap_local_src() -> None:
 
 _bootstrap_local_src()
 
-from sandbox import Client
-from sandbox.build import template_build
-from sandbox.build.models import BuildLogsParams, BuildStatusParams
+from sandbox import Client, Template, default_build_logger
 from sandbox.control.models import SandboxLogsParams
 
 
@@ -38,50 +36,34 @@ def main() -> None:
     log_metric_line("build", client.build.metrics)
 
     template_name = f"python-full-workflow-{time.time_ns()}"
-    created_template = client.build.create_template({
-        "name": template_name,
-    })
-    template_id = created_template["templateID"]
-    build_id = created_template.get("buildID", "")
-    print("template created:", template_id, build_id)
-
     created_sandbox = None
+    template_id = ""
+    build_id = ""
+    build_log_count = [0]
+    build_logger = default_build_logger()
     try:
-        if not build_id:
-            requested_build_id = f"build-{time.time_ns():x}"[:32]
-            client.build.create_build(
-                template_id,
-                requested_build_id,
-                template_build()
-                .from_image(runtime_base_image)
-                .run("mkdir -p /workspace && printf 'hello from python full workflow\\n' >/workspace/built-by-template.txt")
-                .to_request(),
-            )
-            build_id = requested_build_id
-        if not build_id:
-            raise RuntimeError("buildID is empty")
+        built = client.build_template(
+            Template()
+            .from_image(runtime_base_image)
+            .run_cmd("mkdir -p /workspace && printf 'hello from python full workflow\\n' >/workspace/built-by-template.txt")
+            .set_ready_cmd("test -f /workspace/built-by-template.txt"),
+            template_name,
+            wait=True,
+            poll_interval=2.0,
+            on_build_logs=lambda entry: _log_build_entry(entry, build_logger, build_log_count),
+        )
+        template_id = built["templateID"]
+        build_id = built["buildID"]
+        print("build ready:", template_id, build_id, built["status"])
+        print("build detail:", built.get("build", {}).get("status"), built.get("build", {}).get("image"))
 
-        build_status = wait_for_build_ready(client, template_id, build_id)
-        print("build ready:", template_id, build_id, build_status["status"])
+        build_status = client.get_template_build_status(
+            {"templateID": template_id, "buildID": build_id},
+            limit=20,
+        )
+        print("build logs:", build_log_count[0], latest_build_log(build_status))
 
-        build_detail = client.build.get_build(template_id, build_id)
-        print("build detail:", build_detail.get("status"), build_detail.get("image"))
-
-        try:
-            build_logs = client.build.get_build_logs(
-                template_id,
-                build_id,
-                BuildLogsParams(limit=10, direction="forward", source="persistent"),
-            )
-            print(
-                "build logs:",
-                len(build_logs.get("logs", [])),
-                latest_build_log(build_logs, build_status),
-            )
-        except Exception as error:
-            print("build logs warning:", error)
-
-        template_detail = client.build.get_template(template_id)
+        template_detail = client.get_template(template_id)
         print(
             "template detail:",
             template_detail.get("templateID"),
@@ -89,15 +71,11 @@ def main() -> None:
             template_detail.get("extensions", {}).get("seacloud", {}).get("imageSource"),
         )
 
-        created_sandbox = client.create_sandbox({
-            "templateID": template_id,
-            "timeout": 1800,
-            "waitReady": True,
-        })
-        print("sandbox created:", created_sandbox["sandboxID"], created_sandbox["status"])
+        created_sandbox = client.create(template_id, timeout=1800, waitReady=True)
+        print("sandbox created:", created_sandbox.sandbox_id, created_sandbox.raw.get("status"))
 
         sandbox_detail = created_sandbox.reload()
-        print("sandbox detail:", sandbox_detail.get("state"), sandbox_detail["status"])
+        print("sandbox detail:", sandbox_detail.raw.get("state"), sandbox_detail.raw.get("status"))
 
         try:
             sandbox_logs = sandbox_detail.logs(SandboxLogsParams(limit=10, direction="forward"))
@@ -109,13 +87,11 @@ def main() -> None:
         except Exception as error:
             print("sandbox logs warning:", error)
 
-        connected = sandbox_detail.connect({"timeout": 1800})
-        print("sandbox connected:", connected.status_code, connected.sandbox["sandboxID"])
-
-        runtime = connected.sandbox.runtime
+        connected = sandbox_detail.connect(timeout=1800)
+        print("sandbox connected:", connected.sandbox_id, connected.raw.get("status"))
 
         try:
-            runtime_metrics = runtime.metrics()
+            runtime_metrics = connected.get_metrics()
             print(
                 "runtime metrics:",
                 f"cpu={runtime_metrics.get('cpu_used_pct')}",
@@ -125,27 +101,27 @@ def main() -> None:
         except Exception as error:
             print("runtime metrics warning:", error)
 
-        listing = runtime.list_dir({"path": "/workspace"})
-        print("workspace entries:", len(listing.get("entries", [])))
+        listing = connected.files.list("/workspace")
+        print("workspace entries:", len(listing))
 
-        run = runtime.run({
-            "cmd": "sh",
-            "args": ["-lc", "cat /workspace/built-by-template.txt && echo workflow-ok"],
-        })
+        run = connected.commands.run(
+            "sh",
+            args=["-lc", "cat /workspace/built-by-template.txt && echo workflow-ok"],
+        )
         print("run result:", run.get("exit_code"), repr(run.get("stdout", "")), repr(run.get("stderr", "")))
 
         if keep_resources:
-            print("kept resources:", template_id, created_sandbox["sandboxID"])
+            print("kept resources:", template_id, created_sandbox.sandbox_id)
     finally:
         if not keep_resources and created_sandbox is not None:
             try:
                 created_sandbox.delete()
-                print("deleted sandbox:", created_sandbox["sandboxID"])
+                print("deleted sandbox:", created_sandbox.sandbox_id)
             except Exception as error:
                 print("delete sandbox warning:", error)
         if not keep_resources:
             try:
-                client.build.delete_template(template_id)
+                client.delete_template(template_id)
                 print("deleted template:", template_id)
             except Exception as error:
                 print("delete template warning:", error)
@@ -177,10 +153,12 @@ def log_metric_line(name: str, fn) -> None:
         print(f"{name} metrics warning:", error)
 
 
-def latest_build_log(build_logs: dict, build_status: dict) -> str:
-    logs = build_logs.get("logs", [])
-    if logs:
-        return str(logs[-1].get("message", ""))
+def _log_build_entry(entry, logger, counter: list[int]) -> None:
+    counter[0] += 1
+    logger(entry)
+
+
+def latest_build_log(build_status: dict) -> str:
     log_entries = build_status.get("logEntries", [])
     if log_entries:
         return str(log_entries[-1].get("message", ""))
@@ -195,20 +173,6 @@ def latest_sandbox_log(logs: dict) -> str:
     if not entries:
         return ""
     return str(entries[-1].get("message", ""))
-
-
-def wait_for_build_ready(client: Client, template_id: str, build_id: str) -> dict:
-    deadline = time.time() + 180
-    last = None
-    while time.time() < deadline:
-        status = client.build.get_build_status(template_id, build_id, BuildStatusParams(limit=20))
-        last = status
-        if status.get("status") == "ready":
-            return status
-        if status.get("status") == "error":
-            raise RuntimeError(f"build failed: {status}")
-        time.sleep(2)
-    raise RuntimeError(f"build did not complete before deadline: {last}")
 
 
 if __name__ == "__main__":

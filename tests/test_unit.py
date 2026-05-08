@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import ssl
 import unittest
-from urllib.error import HTTPError
+from typing import Any
+from urllib.error import HTTPError, URLError
 
-from sandbox import Client
+from sandbox import Client, Template
 from sandbox.cmd import CmdRequestOptions, CommandService, DownloadRequest, UploadBytesRequest
+import sandbox.cmd.service as cmd_service_module
 from sandbox.control import SandboxLogsParams
 from sandbox.core import APIError, NotFoundError, RequestTimeoutError, ValidationError
 
@@ -89,6 +92,16 @@ class ClientUnitTest(unittest.TestCase):
         self.assertEqual(response["sandboxID"], "sb-1")
         self.assertEqual(response.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
 
+    def test_create_sandbox_allows_missing_template_id(self) -> None:
+        def handler(request):
+            self.assertEqual(request.full_url, "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes")
+            self.assertEqual(json.loads(request.data.decode("utf-8")), {"waitReady": False})
+            return FakeResponse(201, json.dumps({"sandboxID": "sb-2"}))
+
+        client = MockClient(handler)
+        response = client.create_sandbox({"waitReady": False})
+        self.assertEqual(response["sandboxID"], "sb-2")
+
     def test_build_namespace_reuses_gateway_configuration(self) -> None:
         def handler(request):
             if request.full_url.endswith("/api/v1/templates"):
@@ -96,7 +109,7 @@ class ClientUnitTest(unittest.TestCase):
                 self.assertEqual(request.get_header("X-project-id"), "project-1")
                 self.assertEqual(
                     json.loads(request.data.decode("utf-8")),
-                    {"name": "demo", "teamID": "project-1", "cpuCount": 2, "memoryMB": 1024},
+                    {"name": "demo", "cpuCount": 2, "memoryMB": 1024},
                 )
                 return FakeResponse(202, json.dumps({
                     "templateID": "tpl-1",
@@ -109,7 +122,7 @@ class ClientUnitTest(unittest.TestCase):
             self.fail("unexpected request")
 
         client = MockClient(handler)
-        response = client.build.create_template({"name": "demo", "teamID": "project-1", "cpuCount": 2, "memoryMB": 1024})
+        response = client.build.create_template({"name": "demo", "cpuCount": 2, "memoryMB": 1024})
         self.assertEqual(response["templateID"], "tpl-1")
 
     def test_api_error_accepts_string_detail(self) -> None:
@@ -216,6 +229,55 @@ class ClientUnitTest(unittest.TestCase):
         self.assertEqual(calls[0][1], "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes/sb-1")
         self.assertEqual(calls[-1][0], "DELETE")
 
+        pause_call = next(call for call in calls if call[1].endswith("/pause"))
+        self.assertEqual(pause_call[2], b"")
+
+        refresh_without_body = next(
+            call for call in calls if call[1].endswith("/refreshes") and call[2] == b""
+        )
+        self.assertEqual(refresh_without_body[0], "POST")
+
+    def test_admin_control_endpoints(self) -> None:
+        calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+        def handler(request):
+            body = json.loads(request.data.decode("utf-8")) if request.data else None
+            calls.append((request.get_method(), request.full_url, body))
+            if request.full_url.endswith("/admin/pool/status"):
+                return FakeResponse(200, json.dumps({
+                    "code": 0,
+                    "data": {"total": 10, "warm": 2, "active": 3, "creating": 1, "stopped": 1, "deleting": 1, "deleted": 2, "utilization": 0.5},
+                    "request_id": "req-pool",
+                }))
+            if request.full_url.endswith("/admin/rolling/start"):
+                return FakeResponse(200, json.dumps({
+                    "code": 0,
+                    "data": {"phase": "running", "progress": 0.25, "warm_total": 4, "warm_updated": 1, "duration": "10s"},
+                    "request_id": "req-start",
+                }))
+            if request.full_url.endswith("/admin/rolling/status"):
+                return FakeResponse(200, json.dumps({
+                    "code": 0,
+                    "data": {"phase": "running", "progress": 0.5, "warm_total": 4, "warm_updated": 2, "duration": "20s"},
+                    "request_id": "req-status",
+                }))
+            if request.full_url.endswith("/admin/rolling/cancel"):
+                return FakeResponse(200, json.dumps({
+                    "code": 0,
+                    "data": {"phase": "cancelled", "progress": 0.5, "warm_total": 4, "warm_updated": 2, "duration": "21s"},
+                    "request_id": "req-cancel",
+                }))
+            self.fail("unexpected request")
+
+        client = MockClient(handler)
+        self.assertEqual(client.get_pool_status()["request_id"], "req-pool")
+        self.assertEqual(client.start_rolling_update({"templateId": "tpl-1"})["request_id"], "req-start")
+        self.assertEqual(client.get_rolling_update_status()["request_id"], "req-status")
+        self.assertEqual(client.cancel_rolling_update()["request_id"], "req-cancel")
+        self.assertEqual(calls[1][2], {"templateId": "tpl-1"})
+        with self.assertRaises(ValidationError):
+            client.start_rolling_update({"templateId": " "})
+
     def test_bound_sandbox_helpers_reuse_original_client(self) -> None:
         seen: list[str] = []
 
@@ -244,6 +306,72 @@ class ClientUnitTest(unittest.TestCase):
         self.assertTrue(seen[1].endswith("/api/v1/sandboxes/sb-1"))
         self.assertTrue(seen[2].endswith("/api/v1/sandboxes/sb-1/logs"))
 
+    def test_high_level_client_helpers_reuse_stored_gateway_config(self) -> None:
+        calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+        def handler(request):
+            body = json.loads(request.data.decode("utf-8")) if request.data else None
+            calls.append((request.get_method(), request.full_url, body))
+            if request.full_url.endswith("/api/v1/sandboxes"):
+                return FakeResponse(201, json.dumps({
+                    "sandboxID": "sb-high",
+                    "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
+                    "envdAccessToken": "unit-runtime-auth",
+                    "status": "running",
+                }))
+            return FakeResponse(200, json.dumps({
+                "sandboxID": "sb-high",
+                "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
+                "envdAccessToken": "unit-runtime-auth",
+                "status": "running",
+            }))
+
+        client = MockClient(handler)
+        sandbox = client.create("tpl", waitReady=True)
+        info = sandbox.get_info()
+
+        self.assertEqual(sandbox.sandbox_id, "sb-high")
+        self.assertEqual(info["sandboxID"], "sb-high")
+        self.assertEqual(calls[0][2], {"templateID": "tpl", "waitReady": True})
+        self.assertEqual(calls[1][1], "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes/sb-high")
+
+    def test_build_template_helper_reuses_build_service(self) -> None:
+        calls: list[tuple[str, str, dict[str, Any] | None, str | None]] = []
+
+        def handler(request):
+            body = json.loads(request.data.decode("utf-8")) if request.data else None
+            calls.append((request.get_method(), request.full_url, body, request.get_header("X-project-id")))
+            if request.full_url.endswith("/api/v1/templates"):
+                return FakeResponse(202, json.dumps({
+                    "templateID": "tpl-1",
+                    "buildID": "build-1",
+                    "public": False,
+                    "names": ["demo"],
+                    "tags": [],
+                    "aliases": [],
+                }))
+            if "/status" in request.full_url:
+                return FakeResponse(200, json.dumps({"status": "ready", "logEntries": []}))
+            if "/builds/" in request.full_url and request.get_method() == "POST":
+                return FakeResponse(202, json.dumps({"buildID": "build-1", "status": "building"}))
+            if "/builds/" in request.full_url:
+                return FakeResponse(200, json.dumps({"buildID": "build-1", "status": "ready"}))
+            return FakeResponse(200, json.dumps({
+                "templateID": "tpl-1",
+                "names": ["demo"],
+                "tags": ["v1"],
+                "aliases": [],
+                "public": False,
+            }))
+
+        client = MockClient(handler)
+        built = client.build_template(Template().from_base_image().run_cmd("echo hello"), "demo:v1", cpu_count=2)
+
+        self.assertEqual(built["templateID"], "tpl-1")
+        self.assertEqual(calls[0][1], "https://sandbox-gateway.cloud.seaart.ai/api/v1/templates")
+        self.assertEqual(calls[0][2], {"name": "demo", "tags": ["v1"], "cpuCount": 2})
+        self.assertEqual(calls[0][3], "project-1")
+
     def test_validations(self) -> None:
         client = MockClient(lambda request: FakeResponse(200, "{}"))
 
@@ -257,6 +385,50 @@ class ClientUnitTest(unittest.TestCase):
             client.refresh_sandbox("sb", {"duration": 3601})
         with self.assertRaises(ValidationError):
             client.send_heartbeat("sb", {"status": "bad"})
+
+    def test_boundary_values_are_accepted(self) -> None:
+        calls = []
+
+        def handler(request):
+            calls.append((request.get_method(), request.full_url, request.data))
+            if request.full_url.endswith("/connect"):
+                return FakeResponse(200, json.dumps({"sandboxID": "sb"}))
+            if request.full_url.endswith("/heartbeat"):
+                return FakeResponse(200, json.dumps({
+                    "code": 0,
+                    "message": "success",
+                    "data": {"received": True, "status": "healthy"},
+                    "request_id": "req-boundary",
+                }))
+            if "/logs" in request.full_url:
+                return FakeResponse(200, json.dumps({"logs": []}))
+            return FakeResponse(204, "")
+
+        client = MockClient(handler)
+        client.get_sandbox_logs("sb", SandboxLogsParams(cursor=0, limit=1000, direction="backward", search="x" * 256))
+        client.connect_sandbox("sb", {"timeout": 0})
+        client.set_sandbox_timeout("sb", {"timeout": 86400})
+        client.refresh_sandbox("sb", {"duration": 0})
+        client.refresh_sandbox("sb", {"duration": 3600})
+        client.send_heartbeat("sb", {"status": "healthy"})
+
+        self.assertEqual(len(calls), 6)
+
+    def test_empty_sandbox_ids_are_rejected(self) -> None:
+        client = MockClient(lambda request: FakeResponse(200, "{}"))
+
+        with self.assertRaises(ValidationError):
+            client.get_sandbox(" ")
+        with self.assertRaises(ValidationError):
+            client.pause_sandbox(" ")
+        with self.assertRaises(ValidationError):
+            client.connect_sandbox(" ", {"timeout": 1})
+        with self.assertRaises(ValidationError):
+            client.set_sandbox_timeout(" ", {"timeout": 1})
+        with self.assertRaises(ValidationError):
+            client.refresh_sandbox(" ", {"duration": 1})
+        with self.assertRaises(ValidationError):
+            client.send_heartbeat(" ", {"status": "healthy"})
 
     def test_api_error_decoding(self) -> None:
         def handler(request):
@@ -305,6 +477,130 @@ class ClientUnitTest(unittest.TestCase):
         with response:
             self.assertEqual(response.read().decode("utf-8"), "hell")
 
+    def test_cmd_envs_configure_and_ports(self) -> None:
+        calls: list[tuple[str, str, dict[str, Any]]] = []
+
+        def handler(method, path, kwargs):
+            calls.append((method, path, kwargs))
+            if path == "/envs":
+                return FakeResponse(200, json.dumps({"NODE_ENV": "production"}))
+            if path == "/configure":
+                return FakeResponse(204, "")
+            if path == "/ports":
+                return FakeResponse(200, json.dumps([{"port": 3000, "protocol": "tcp", "address": "127.0.0.1"}]))
+            self.fail(f"unexpected path {path}")
+
+        cmd = MockCommandService(handler)
+        self.assertEqual(cmd.envs(), {"NODE_ENV": "production"})
+        cmd.configure({"envs": {"A": "1"}})
+        self.assertEqual(cmd.ports(), [{"port": 3000, "protocol": "tcp", "address": "127.0.0.1"}])
+        self.assertEqual(calls[1][2]["body"], {"envs": {"A": "1"}})
+
+    def test_cmd_watcher_and_file_helpers(self) -> None:
+        def handler(method, path, kwargs):
+            if path == "/filesystem.Filesystem/CreateWatcher":
+                self.assertEqual(kwargs["body"], {"path": "/tmp", "recursive": True})
+                return FakeResponse(200, json.dumps({"watcherId": "watch-1"}))
+            if path == "/filesystem.Filesystem/GetWatcherEvents":
+                self.assertEqual(kwargs["body"], {"watcherId": "watch-1", "limit": 10})
+                return FakeResponse(200, json.dumps({"events": [{"name": "a.txt", "type": "EVENT_TYPE_WRITE"}]}))
+            if path == "/filesystem.Filesystem/RemoveWatcher":
+                self.assertEqual(kwargs["body"], {"watcherId": "watch-1"})
+                return FakeResponse(200, json.dumps({}))
+            if path.startswith("/files?"):
+                self.assertIn("path=%2Ftmp", path)
+                self.assertIn("multipart/form-data", kwargs["headers"]["Content-Type"])
+                self.assertIn(b'filename="hello.txt"', kwargs["data"])
+                return FakeResponse(200, json.dumps([{"path": "/tmp/hello.txt", "name": "hello.txt", "type": "file"}]))
+            if path == "/files/compose":
+                self.assertEqual(kwargs["body"], {"source_paths": ["/tmp/a.txt", "/tmp/b.txt"], "destination": "/tmp/out.txt"})
+                return FakeResponse(200, json.dumps({"path": "/tmp/out.txt", "name": "out.txt", "type": "file"}))
+            self.fail(f"unexpected path {path}")
+
+        cmd = MockCommandService(handler)
+        watcher = cmd.create_watcher({"path": "/tmp", "recursive": True})
+        events = cmd.get_watcher_events({"watcherId": watcher["watcherId"], "limit": 10})
+        cmd.remove_watcher({"watcherId": watcher["watcherId"]})
+        uploaded = cmd.upload_multipart(type("Req", (), {
+            "path": "/tmp",
+            "parts": [type("Part", (), {
+                "data": b"hello",
+                "field_name": "file",
+                "file_name": "hello.txt",
+                "content_type": "text/plain",
+            })()],
+        })())
+        composed = cmd.compose_files({"source_paths": ["/tmp/a.txt", "/tmp/b.txt"], "destination": "/tmp/out.txt"})
+
+        self.assertEqual(watcher["watcherId"], "watch-1")
+        self.assertEqual(events["events"], [{"name": "a.txt", "type": "EVENT_TYPE_WRITE"}])
+        self.assertEqual(uploaded, [{"path": "/tmp/hello.txt", "name": "hello.txt", "type": "file"}])
+        self.assertEqual(composed["path"], "/tmp/out.txt")
+        with self.assertRaises(ValidationError):
+            cmd.get_watcher_events({"watcherId": " "})
+        with self.assertRaises(ValidationError):
+            cmd.remove_watcher({"watcherId": " "})
+        with self.assertRaises(ValidationError):
+            cmd.upload_multipart(type("Req", (), {"path": "/tmp", "parts": []})())
+
+    def test_cmd_files_content_upload_bytes_upload_json_and_edit(self) -> None:
+        def handler(method, path, kwargs):
+            if path == "/files/content?path=%2Ftmp%2Fa.txt&max_tokens=32":
+                return FakeResponse(200, json.dumps({"type": "text", "content": "hello", "truncated": False}))
+            if path == "/files?path=%2Ftmp%2Fa.txt":
+                self.assertEqual(kwargs["headers"]["Content-Encoding"], "gzip")
+                self.assertEqual(kwargs["data"][:2], b"\x1f\x8b")
+                return FakeResponse(200, json.dumps([{"path": "/tmp/a.txt", "name": "a.txt", "type": "file"}]))
+            if path == "/files":
+                self.assertEqual(kwargs["body"], {"path": "/tmp/b.txt", "content": "hello"})
+                return FakeResponse(200, json.dumps([{"path": "/tmp/b.txt", "name": "b.txt", "type": "file"}]))
+            if path == "/filesystem.Filesystem/Edit":
+                self.assertEqual(kwargs["body"], {"path": "/tmp/a.txt", "oldText": "a", "newText": "b"})
+                return FakeResponse(200, json.dumps({"message": "ok"}))
+            self.fail(f"unexpected path {path}")
+
+        cmd = MockCommandService(handler)
+        self.assertEqual(
+            cmd.files_content(type("Req", (), {"path": "/tmp/a.txt", "max_tokens": 32})()),
+            {"type": "text", "content": "hello", "truncated": False},
+        )
+        self.assertEqual(
+            cmd.upload_bytes(UploadBytesRequest(path="/tmp/a.txt", data=b"hello", gzip_compress=True)),
+            [{"path": "/tmp/a.txt", "name": "a.txt", "type": "file"}],
+        )
+        self.assertEqual(
+            cmd.upload_json({"path": "/tmp/b.txt", "content": "hello"}),
+            [{"path": "/tmp/b.txt", "name": "b.txt", "type": "file"}],
+        )
+        self.assertEqual(
+            cmd.edit({"path": "/tmp/a.txt", "oldText": "a", "newText": "b"}),
+            {"message": "ok"},
+        )
+
+    def test_cmd_invalid_process_and_path_inputs(self) -> None:
+        cmd = MockCommandService(lambda method, path, kwargs: FakeResponse(200, "{}"))
+
+        with self.assertRaises(ValidationError):
+            cmd.create_watcher({"path": " "})
+        with self.assertRaises(ValidationError):
+            cmd.files_content(type("Req", (), {"path": " ", "max_tokens": None})())
+        with self.assertRaises(ValidationError):
+            cmd.upload_json({"path": " "})
+        with self.assertRaises(ValidationError):
+            cmd.edit({"path": " ", "oldText": "a", "newText": "b"})
+        with self.assertRaises(ValidationError):
+            cmd.stream_input([])
+        with self.assertRaises(ValidationError):
+            cmd.send_input({"process": {}, "input": {"stdin": ""}})
+        with self.assertRaises(ValidationError):
+            cmd.send_input({"process": {"pid": 1, "tag": "x"}, "input": {"stdin": "x"}})
+        with self.assertRaises(ValidationError):
+            cmd.send_signal({"process": {}, "signal": "SIGNAL_SIGKILL"})
+        with self.assertRaises(ValidationError):
+            cmd.close_stdin({"process": {}})
+        with self.assertRaises(ValidationError):
+            cmd.get_result({"cmdId": " "})
+
     def test_runtime_from_sandbox_uses_envd_fields(self) -> None:
         client = MockClient(lambda request: FakeResponse(200, "{}"))
         runtime = client.runtime_from_sandbox({
@@ -350,6 +646,62 @@ class ClientUnitTest(unittest.TestCase):
         ])
         self.assertIsNotNone(frame)
 
+    def test_cmd_watch_dir_skips_keepalive_and_stops_on_end_frame(self) -> None:
+        stream_bytes = empty_connect_frame() + connect_frame({
+            "filesystem": {"type": "EVENT_TYPE_WRITE", "name": "a.txt"},
+        }) + empty_connect_frame(0x02)
+
+        def handler(method, path, kwargs):
+            if path == "/filesystem.Filesystem/WatchDir":
+                self.assertEqual(kwargs["headers"]["Content-Type"], "application/connect+json")
+                return FakeResponse(200, "", raw_body=stream_bytes)
+            self.fail(f"unexpected path {path}")
+
+        cmd = MockCommandService(handler)
+        stream = cmd.watch_dir({"path": "/tmp", "recursive": True})
+        first = stream.next()
+        second = stream.next()
+        stream.close()
+        self.assertEqual(first, {"filesystem": {"type": "EVENT_TYPE_WRITE", "name": "a.txt"}})
+        self.assertIsNone(second)
+
+    def test_cmd_connect_retries_transient_ssl_eof_once(self) -> None:
+        calls = 0
+        original_urlopen = cmd_service_module.urlopen
+
+        def fake_urlopen(request, timeout=30.0):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise URLError(ssl.SSLEOFError(8, "EOF occurred in violation of protocol"))
+            return FakeResponse(200, "", raw_body=connect_frame({
+                "event": {"start": {"pid": 77, "cmdId": "cmd-77"}},
+            }))
+
+        cmd_service_module.urlopen = fake_urlopen
+        try:
+            cmd = CommandService(base_url="https://sandbox-runtime.cloud.seaart.ai", access_token="unit-runtime-auth")
+            stream = cmd.connect({"process": {"pid": 77}})
+            first = stream.next()
+            stream.close()
+        finally:
+            cmd_service_module.urlopen = original_urlopen
+
+        self.assertEqual(calls, 2)
+        self.assertEqual(first["event"]["start"]["pid"], 77)
+
+    def test_cmd_stream_input_returns_raw_end_frame(self) -> None:
+        def handler(method, path, kwargs):
+            if path == "/process.Process/StreamInput":
+                return FakeResponse(200, "", raw_body=empty_connect_frame(0x02))
+            self.fail(f"unexpected path {path}")
+
+        cmd = MockCommandService(handler)
+        frame = cmd.stream_input([{"keepalive": {}}])
+        self.assertIsNotNone(frame)
+        self.assertEqual(frame.flags, 0x02)
+        self.assertEqual(frame.payload, b"")
+
     def test_cmd_proxy_passthrough_and_write_file_validation(self) -> None:
         def handler(method, path, kwargs):
             self.assertEqual(path, "/proxy/8080/health")
@@ -372,6 +724,10 @@ class ClientUnitTest(unittest.TestCase):
 def connect_frame(payload: dict[str, object]) -> bytes:
     data = json.dumps(payload).encode("utf-8")
     return bytes([0]) + len(data).to_bytes(4, "big") + data
+
+
+def empty_connect_frame(flags: int = 0) -> bytes:
+    return bytes([flags]) + (0).to_bytes(4, "big")
 
 
 def decode_frames(data: bytes) -> list[dict[str, bytes | int]]:

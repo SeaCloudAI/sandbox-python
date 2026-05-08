@@ -10,13 +10,24 @@ pip install seacloud-sandbox
 
 If you previously installed `0.1.2`, upgrade to `0.1.3` or later. `0.1.2` shipped without the `sandbox.build` package in the published artifact.
 
-## Client Initialization
+## Entrypoints
 
-- unified gateway client: `Client(base_url=..., api_key=..., project_id="")`
-- build plane via root client: `client.build`
-- runtime helper: `sandbox.runtime` or `client.runtime_from_sandbox(sandbox)`
+Preferred public API:
+
+- initialize once: `Client(base_url=..., api_key=..., project_id="")`
+- sandbox lifecycle through the root client: `client.create()`, `client.connect()`, `client.list()`
+- sandbox runtime modules from the returned object: `sandbox.commands`, `sandbox.files`, `sandbox.git`, `sandbox.pty`
+- template builder through the root client: `Template()` plus `client.build_template()`
+- low-level build plane via `client.build`
+- raw runtime helper: `client.runtime_from_sandbox(sandbox.raw)` or low-level sandbox instances returned by `create_sandbox(...)` / `get_sandbox(...)`
 
 `control` and `build` talk to the gateway. Runtime access is derived from sandbox create/detail/connect responses; callers should not hardcode runtime endpoints or tokens. `project_id` is an optional gateway routing header for project-scoped deployments.
+
+## E2B Alignment
+
+- Supported alignment target: sandbox lifecycle, files, commands, git, PTY, and the high-level template DSL are designed to follow the same public workflow as `e2b-docs/sdk`.
+- Known unsupported area: snapshot APIs are not exposed because the underlying platform does not support them yet.
+- Runtime compatibility note: the SDK normalizes a few runtime-specific quirks so the high-level behavior stays E2B-like, such as missing-process `kill()` results, PTY reconnect output framing, and a one-time retry for transient reconnect-stream open failures.
 
 ## Environment
 
@@ -73,18 +84,16 @@ client = Client(
     base_url=os.environ["SEACLOUD_BASE_URL"],
     api_key=os.environ["SEACLOUD_API_KEY"],
     project_id=os.getenv("SEACLOUD_PROJECT_ID", ""),
-    timeout=180,
+    timeout=180.0,
 )
 
-sandbox = client.create_sandbox({
-    "templateID": os.environ["SEACLOUD_TEMPLATE_ID"],
-    "timeout": 1800,
-    "waitReady": True,
-})
+sandbox = client.create(
+    os.environ["SEACLOUD_TEMPLATE_ID"],
+    timeout=1800,
+    waitReady=True,
+)
 try:
-    print(sandbox["sandboxID"], sandbox.get("envdUrl"))
-    if sandbox.get("envdUrl"):
-        print(sandbox.runtime.base_url)
+    print(sandbox.sandbox_id, sandbox.sandbox_domain)
 finally:
     sandbox.delete()
 ```
@@ -92,20 +101,25 @@ finally:
 ### Bound Sandbox Workflow
 
 ```python
-listed = client.list_sandboxes()
+from sandbox import Client
+
+client = Client(
+    base_url=os.environ["SEACLOUD_BASE_URL"],
+    api_key=os.environ["SEACLOUD_API_KEY"],
+)
+listed = client.list()
 
 for sandbox in listed:
-    detail = sandbox.reload()
-    print(detail["sandboxID"], detail["status"])
+    sandbox.reload()
+    print(sandbox.sandbox_id, sandbox.raw.get("status"))
 ```
 
-### Build Plane Through Root Client
+### Template Build
 
 ```python
 import os
 
-from sandbox import Client
-from sandbox.build import template_build
+from sandbox import Client, Template, wait_for_file
 
 client = Client(
     base_url=os.environ["SEACLOUD_BASE_URL"],
@@ -113,68 +127,81 @@ client = Client(
     project_id=os.getenv("SEACLOUD_PROJECT_ID", ""),
 )
 
-template = client.build.create_template({
-    "name": "demo",
-})
-try:
-    build_id = "build-demo"
-    client.build.create_build(
-        template["templateID"],
-        build_id,
-        template_build()
-        .from_image("docker.io/library/alpine:3.20")
-        .run("echo hello-from-python >/tmp/hello.txt")
-        .to_request(),
-    )
-    print(template["templateID"], build_id)
-finally:
-    client.build.delete_template(template["templateID"])
+built = client.build_template(
+    Template()
+    .from_image("docker.io/library/alpine:3.20")
+    .run_cmd("echo hello-from-python >/tmp/hello.txt")
+    .set_ready_cmd(wait_for_file("/tmp/hello.txt")),
+    "demo:v1",
+)
+
+print(built["templateID"], built["buildID"], built["status"])
 ```
 
-### Runtime Helper
+High-level template helpers currently include:
+
+- lifecycle and status: `client.build_template`, `client.build_template_in_background`, `client.template_exists`, `client.template_alias_exists`, `client.get_template_build_status`, `client.list_templates`, `client.get_template`, `client.delete_template`
+- serialization: `Template.to_json`, `Template.to_dockerfile`
+- base images and registries: `from_dockerfile`, `from_base_image`, `from_node_image`, `from_python_image`, `from_bun_image`, `from_ubuntu_image`, `from_debian_image`, `from_aws_registry`, `from_gcp_registry`
+- build-step helpers: `copy`, `copy_items`, `skip_cache`, `apt_install`, `git_clone`, `make_dir`, `make_symlink`, `npm_install`, `pip_install`, `bun_install`, `remove`, `rename`
+- execution and config helpers: `run_cmd`, `set_envs`, `set_workdir`, `set_user`, `set_start_cmd`, `set_ready_cmd`, `files_hash`
+- supported local copy options: `force_upload`, `mode`, `resolve_symlinks`
+- supported command and path options: `run_cmd(..., user=...)`, `git_clone(..., user=...)`, `make_dir(..., user=...)`, `make_symlink(..., user=...)`, `remove(..., user=...)`, `rename(..., user=...)`
+- intentionally not exposed yet: `copy(..., user=...)`, MCP server helpers, and devcontainer helpers
+
+### Runtime Modules
 
 ```python
 import os
 
 from sandbox import Client
-from sandbox.cmd import FileRequest, UploadBytesRequest
 
 client = Client(
     base_url=os.environ["SEACLOUD_BASE_URL"],
     api_key=os.environ["SEACLOUD_API_KEY"],
 )
 
-created = client.create_sandbox({
-    "templateID": os.environ["SEACLOUD_TEMPLATE_ID"],
-    "waitReady": True,
-})
-
-runtime = created.runtime
+sandbox = client.create(
+    os.environ["SEACLOUD_TEMPLATE_ID"],
+    waitReady=True,
+)
 
 try:
-    runtime.write_file(UploadBytesRequest(
-        path="/root/workspace/hello.txt",
-        data=b"hello from python",
-    ))
-
-    with runtime.read_file(FileRequest(path="/root/workspace/hello.txt")) as response:
-        print(response.read().decode("utf-8"))
+    sandbox.files.write("/root/workspace/hello.txt", b"hello from python")
+    print(sandbox.files.read("/root/workspace/hello.txt"))
+    print(sandbox.get_host(3000))
 finally:
-    created.delete()
+    sandbox.delete()
 ```
+
+Bound sandbox helpers currently include:
+
+- lifecycle: `reload`, `connect`, `resume`, `get_info`, `logs`, `pause`, `kill`, `delete`, `refresh`, `set_timeout`, `is_running`
+- runtime conveniences: `get_metrics`, `get_host`, `proxy`
+- commands module: `run`, `exec`, `list`, `connect`, `kill`, `send_stdin`
+- filesystem module: `exists`, `get_info`, `list`, `make_dir`, `read`, `write`, `write_files`, `remove`, `rename`, `watch_dir`
+- git module: `clone`, `pull`, `checkout`, `status`
+- pty module: `create`, `connect`, `kill`, `send_stdin`, `resize`
 
 ## Recommended Usage
 
-For most integrations, stay on the root client as long as possible:
+For most integrations, prefer one root client per process:
 
 - initialize once with `Client(base_url=..., api_key=..., project_id="")`
+- create sandboxes with `client.create(...)`
+- continue through `sandbox.commands`, `sandbox.files`, `sandbox.git`, and `sandbox.pty`
+- build templates with `Template()` plus `client.build_template(...)`
+
+Low-level methods remain available when you need tighter request control:
+
 - use `create_sandbox`, `list_sandboxes`, `get_sandbox`, `connect_sandbox`
-- continue from the returned sandbox object with `reload()`, `logs()`, `pause()`, `refresh()`, `set_timeout()`, `connect()`, `delete()`
+- continue from the returned sandbox object with `reload()`, `connect()`, `resume()`, `get_info()`, `get_metrics()`, `get_host()`, `logs()`, `pause()`, `refresh()`, `set_timeout()`, `kill()`, `delete()`, and `is_running()`
 - only switch to runtime with `runtime` when you need file/process/stream operations
-- use `client.build` only for template/build workflows
+- use `build_template`, `build_template_in_background`, `template_exists`, `get_template_build_status`, `list_templates`, `get_template`, and `delete_template` on the root client for bound template workflows
+- use `client.build` only for raw template/build workflows
 - use `template_build()` when you want a small fluent helper that expands into the public build request payload
 
-Low-level submodules remain available when you want direct stateless calls or need request/response models explicitly.
+Low-level submodules remain available when you need direct request/response models or tighter transport control.
 
 ## API Surface
 
@@ -188,11 +215,13 @@ Low-level submodules remain available when you want direct stateless calls or ne
 
 Recommended root-client path:
 
-- sandbox lifecycle: `create_sandbox`, `list_sandboxes`, `get_sandbox`, `connect_sandbox`
-- follow-up control actions from the returned object: `reload()`, `logs()`, `pause()`, `refresh()`, `set_timeout()`, `connect()`, `delete()`
+- high-level lifecycle: `create`, `connect`, `list`
+- template helpers: `build_template`, `build_template_in_background`, `template_exists`, `template_alias_exists`, `get_template_build_status`, `list_templates`, `get_template`, `delete_template`
+- low-level lifecycle: `create_sandbox`, `list_sandboxes`, `get_sandbox`, `connect_sandbox`
+- follow-up control actions from the returned object: `reload()`, `connect()`, `resume()`, `get_info()`, `get_metrics()`, `get_host()`, `logs()`, `pause()`, `refresh()`, `set_timeout()`, `kill()`, `delete()`, `is_running()`
 - runtime actions from objects that include `envdUrl`: `runtime`
 
-Low-level direct methods like `delete_sandbox` and `get_sandbox_logs` remain available on the root client when you want stateless calls.
+Low-level direct methods like `delete_sandbox` and `get_sandbox_logs` remain available on the root client when you want explicit control-plane requests.
 
 ### Operator APIs
 
@@ -200,16 +229,35 @@ The root client also includes operator-oriented methods such as `get_pool_status
 
 These routes are intended for platform operators, not normal application workloads. Keep them out of business-facing integrations unless you are explicitly building operational tooling.
 
+### Template Facade
+
+Preferred template path:
+
+- `Template()` for build DSL
+- `client.build_template(...)` and `client.build_template_in_background(...)` for create + build + optional polling
+- `client.list_templates(...)`, `client.get_template(...)`, `client.delete_template(...)`, `client.template_exists(...)`, `client.template_alias_exists(...)`, `client.get_template_build_status(...)` for bound lifecycle and status
+- `Template.to_json(...)`, `Template.to_dockerfile(...)` for export helpers
+
+Template builder conveniences include:
+
+- base images and registries: `from_dockerfile`, `from_base_image`, `from_node_image`, `from_python_image`, `from_bun_image`, `from_ubuntu_image`, `from_debian_image`, `from_aws_registry`, `from_gcp_registry`
+- file and command helpers: `copy`, `copy_items`, `skip_cache`, `apt_install`, `git_clone`, `make_dir`, `make_symlink`, `npm_install`, `pip_install`, `bun_install`, `remove`, `rename`, `run_cmd`
+- execution and config helpers: `set_envs`, `set_workdir`, `set_user`, `set_start_cmd`, `set_ready_cmd`, `files_hash`
+- supported local copy options: `force_upload`, `mode`, `resolve_symlinks`
+- supported command and path options: `run_cmd(..., user=...)`, `git_clone(..., user=...)`, `make_dir(..., user=...)`, `make_symlink(..., user=...)`, `remove(..., user=...)`, `rename(..., user=...)`
+- intentionally not exposed yet: `copy(..., user=...)`, MCP server helpers, and devcontainer helpers
+
 ### Build Plane Namespace
 
-`client.build` exposes:
+Low-level `client.build` exposes:
 
 - system: `metrics`
 - direct build: `direct_build`
 - templates: `create_template`, `list_templates`, `get_template_by_alias`, `resolve_template_ref`, `get_template`, `update_template`, `delete_template`
 - builds: `create_build`, `get_build_file`, `rollback_template`, `list_builds`, `get_build`, `get_build_status`, `get_build_logs`
 
-The public template contract is split into three layers: E2B core top-level fields (`name`, `tags`, `alias`, `teamID`, `cpuCount`, `memoryMB`), SeaCloud template extensions under `extensions.seacloud` (`baseTemplateID`, `visibility`, `envs`, `storageType`, `storageSizeGB`), and build-only fields on `create_build` (`fromImage`, `fromTemplate`, `steps`, `startCmd`, `readyCmd`, registry credentials, `filesHash`).
+The public template contract is split into three layers: top-level create fields (`name`, `tags`, `cpuCount`, `memoryMB`), SeaCloud template extensions under `extensions.seacloud` (`baseTemplateID`, `visibility`, `envs`, `storageType`, `storageSizeGB`), and build-only fields on `create_build` (`fromImage`, `fromTemplate`, `steps`, `startCmd`, `readyCmd`, registry credentials, `filesHash`).
+Public create/update calls reject legacy top-level write fields such as `alias`, `teamID`, and `public`.
 
 `create_template` and `update_template` reject `visibility="official"` on public routes, including `extensions.seacloud.visibility == "official"`.
 
@@ -227,7 +275,7 @@ The public template contract is split into three layers: E2B core top-level fiel
 
 ### Runtime Namespace
 
-The object returned by `sandbox.runtime` or `client.runtime_from_sandbox(...)` exposes:
+Low-level runtime objects returned by `client.runtime_from_sandbox(sandbox.raw)` or low-level sandbox instances expose:
 
 - system: `metrics`, `envs`, `configure`, `ports`
 - proxy and file transfer: `proxy`, `download`, `files_content`, `upload_bytes`, `upload_json`, `upload_multipart`, `write_batch`, `compose_files`, `read_file`, `write_file`
@@ -252,20 +300,24 @@ Useful CMD helpers:
 ## Notes
 
 - The gateway entrypoint always needs `base_url + api_key`; project-scoped deployments can additionally set `project_id`.
-- Runtime access should be derived from sandbox response objects with `sandbox.runtime` or `runtime_from_sandbox(...)`.
+- Runtime access should be derived from sandbox response objects with `client.runtime_from_sandbox(sandbox.raw)` or low-level sandbox instances.
 - `create_sandbox` and `get_sandbox` return `envdUrl` and `envdAccessToken` when nano-executor access is enabled.
 - Runtime file/process APIs require a template image that starts nano-executor and returns runtime access fields; if runtime APIs return `404`, verify the selected template supports CMD runtime routes.
 - Runtime requests can override timeout per call through `CmdRequestOptions(timeout=...)`.
 - `waitReady=True` can take longer than the default timeout in production; pass `timeout=...` to `Client(...)` for long-wait workflows.
 - HTTP errors are classified into typed exceptions such as `NotFoundError`, `RateLimitError`, and `ServerError`. Transport timeouts raise `RequestTimeoutError`.
+- High-level `kill()` helpers send `SIGNAL_SIGKILL` and return `False` when the runtime reports a missing process through either `404` or `ESRCH`.
+- PTY handles normalize reconnect output into `pty` even when the runtime emits the bytes through `stdout` / `stderr`.
+- Runtime reconnect streams such as `connect()` and `watch_dir()` retry once on transient TLS EOF / remote-close failures before surfacing the transport error.
 - Sandbox timeout is validated to `0..86400`; refresh duration to `0..3600`.
 - Build validation accepts E2B-style `COPY` / `ENV` / `RUN` / `WORKDIR` / `USER` steps, `force`, and structured `fromImageRegistry` credentials (`registry` / `aws` / `gcp`).
 - Some gateways do not expose `/admin/*` or `/build`; integration tests skip those cases on `404`.
+- Some filesystem layouts reject watcher APIs entirely; the integration suite skips watcher coverage when the runtime reports that limitation.
 
 ## Security
 
 - Do not commit `SEACLOUD_API_KEY`, `envdAccessToken`, or sandbox access tokens.
-- Treat runtime tokens as sandbox-scoped secrets. Prefer `sandbox.runtime` or `client.runtime_from_sandbox(...)` so response-scoped runtime access is not copied into configuration.
+- Treat runtime tokens as sandbox-scoped secrets. Prefer `client.runtime_from_sandbox(sandbox.raw)` or low-level sandbox instances so response-scoped runtime access is not copied into configuration.
 - Do not log raw API keys or runtime tokens. SDK exceptions may include response bodies, so avoid logging full error payloads in shared systems.
 - Set `project_id` in `Client(...)` when your gateway requires explicit project routing. The SDK sends it as `X-Project-ID`.
 
@@ -282,6 +334,7 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 `tpl-base-dc11799b9f9f4f9e` is a known-good SeaCloudAI runtime template for validating CMD routes such as `list_dir`, `read_file`, `write_file`, and `run`.
+You can also run the same disposable smoke flow from GitHub Actions with `.github/workflows/integration-smoke.yml` after setting the `SANDBOX_TEST_API_KEY` repository secret.
 
 ## Integration Tests
 
@@ -294,6 +347,7 @@ PYTHONPATH=src python -m unittest discover -s tests -p 'test_*.py' -v
 ```
 
 Use a runtime-enabled template for CMD integration coverage. For SeaCloudAI production smoke tests, `tpl-base-dc11799b9f9f4f9e` is a known-good runtime template.
+The same smoke suite is available as a manual GitHub Actions dispatch in `.github/workflows/integration-smoke.yml`.
 
 ## Release
 

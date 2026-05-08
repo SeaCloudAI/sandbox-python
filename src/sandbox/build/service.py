@@ -17,15 +17,12 @@ from .models import (
 _TEMPLATE_CREATE_FIELDS = {
     "name",
     "tags",
-    "alias",
-    "teamID",
     "cpuCount",
     "memoryMB",
     "extensions",
 }
 
 _TEMPLATE_UPDATE_FIELDS = {
-    "public",
     "extensions",
 }
 
@@ -58,11 +55,12 @@ class BuildService(BaseTransport):
         body: TemplateCreateRequest | None = None,
     ) -> dict[str, Any]:
         self._validate_template_create_body(body)
+        cleaned_body = _compact_mapping(body)
         return self._request_json(
             "POST",
             "/api/v1/templates",
             headers=self.build_headers({"Content-Type": "application/json"}),
-            body=body or {},
+            body=cleaned_body,
             expected_statuses=(202,),
         )
 
@@ -104,11 +102,12 @@ class BuildService(BaseTransport):
     ) -> dict[str, Any]:
         self._require_template_id(template_id)
         self._validate_template_update_body(body)
+        cleaned_body = _compact_mapping(body)
         return self._request_json(
             "PATCH",
             f"/api/v1/templates/{quote(template_id, safe='')}",
             headers=self.build_headers({"Content-Type": "application/json"}),
-            body=body or {},
+            body=cleaned_body,
         )
 
     def delete_template(self, template_id: str) -> None:
@@ -422,3 +421,19 @@ class BuildService(BaseTransport):
 
     def _is_sha256(self, value: str) -> bool:
         return len(value) == 64 and all(ch in "0123456789abcdef" for ch in value)
+
+
+def _compact_mapping(body: Mapping[str, Any] | None) -> dict[str, Any]:
+    if not body:
+        return {}
+    compacted: dict[str, Any] = {}
+    for key, value in body.items():
+        if value is None:
+            continue
+        if isinstance(value, Mapping):
+            nested = _compact_mapping(value)
+            if nested:
+                compacted[key] = nested
+            continue
+        compacted[key] = value
+    return compacted

@@ -7,15 +7,12 @@ from typing import TypedDict
 class TemplateCreateRequest(TypedDict, total=False):
     name: str
     tags: list[str]
-    alias: str
-    teamID: str
     cpuCount: int
     memoryMB: int
     extensions: dict[str, object]
 
 
 class TemplateUpdateRequest(TypedDict, total=False):
-    public: bool
     extensions: dict[str, object]
 
 

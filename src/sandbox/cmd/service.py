@@ -4,9 +4,10 @@ import base64
 import gzip
 import json
 import socket
+import ssl
 import uuid
 from typing import Any, Mapping
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
@@ -30,6 +31,18 @@ from .models import (
     ProxyRequest,
     UploadBytesRequest,
     UploadMultipartRequest,
+)
+
+_RETRYABLE_STREAM_OPEN_PATHS = frozenset({
+    "/process.Process/Connect",
+    "/filesystem.Filesystem/WatchDir",
+})
+_RETRYABLE_STREAM_ERROR_MARKERS = (
+    "unexpected eof while reading",
+    "eof occurred in violation of protocol",
+    "connection reset by peer",
+    "remote end closed connection without response",
+    "server disconnected",
 )
 
 
@@ -485,16 +498,26 @@ class CommandService:
             method=method.upper(),
         )
         request_timeout = self.timeout if timeout is None else timeout
-        try:
-            response = urlopen(request, timeout=request_timeout)
-        except HTTPError as exc:
-            if expected_statuses is None:
-                return exc
-            raise self._decode_api_error(exc) from exc
-        except TimeoutError as exc:
-            raise RequestTimeoutError(request_timeout, cause=exc) from exc
-        except socket.timeout as exc:
-            raise RequestTimeoutError(request_timeout, cause=exc) from exc
+        attempts = 2 if self._should_retry_stream_open(method, path) else 1
+
+        for attempt in range(attempts):
+            try:
+                response = urlopen(request, timeout=request_timeout)
+                break
+            except HTTPError as exc:
+                if expected_statuses is None:
+                    return exc
+                raise self._decode_api_error(exc) from exc
+            except TimeoutError as exc:
+                raise RequestTimeoutError(request_timeout, cause=exc) from exc
+            except socket.timeout as exc:
+                raise RequestTimeoutError(request_timeout, cause=exc) from exc
+            except (URLError, ssl.SSLError) as exc:
+                if attempt + 1 < attempts and self._is_retryable_stream_open_error(exc):
+                    continue
+                raise
+        else:
+            raise AssertionError("unreachable")
 
         status_code = getattr(response, "status", response.getcode())
         if expected_statuses is not None and status_code not in expected_statuses:
@@ -539,6 +562,16 @@ class CommandService:
             expected_statuses=(200,),
             timeout=self._timeout_from_options(options),
         )
+
+    def _should_retry_stream_open(self, method: str, path: str) -> bool:
+        return method.upper() == "POST" and path in _RETRYABLE_STREAM_OPEN_PATHS
+
+    def _is_retryable_stream_open_error(self, error: Exception) -> bool:
+        reason = error.reason if isinstance(error, URLError) else error
+        if isinstance(reason, ssl.SSLError):
+            return True
+        message = str(reason).lower()
+        return any(marker in message for marker in _RETRYABLE_STREAM_ERROR_MARKERS)
 
     def _timeout_from_options(self, options: CmdRequestOptions | None) -> float | None:
         if options is None or options.timeout is None:
