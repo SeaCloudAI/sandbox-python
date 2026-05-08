@@ -26,18 +26,13 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
         cls.service = BuildService(base_url=base_url, api_key=api_key)
         cls.build_image = build_image
 
-    def test_direct_build_anonymous_polling(self) -> None:
-        try:
-            direct = self.service.direct_build({
-                "project": "sdk-build-integration",
-                "image": "python-direct-build",
-                "tag": f"t{time.time_ns()}",
-                "dockerfile": "FROM alpine:3.20\nRUN echo direct-build-test >/tmp/direct-build.txt\n",
-            })
-        except APIError as exc:
-            if exc.status_code == 404:
-                self.skipTest("direct build endpoint is not exposed by this gateway")
-            raise
+    def test_direct_build_polling(self) -> None:
+        direct = self.service.direct_build({
+            "project": "sdk-build-integration",
+            "image": "python-direct-build",
+            "tag": f"t{time.time_ns()}",
+            "dockerfile": "FROM alpine:3.20\nRUN echo direct-build-test >/tmp/direct-build.txt\n",
+        })
         template_id = direct["templateID"]
         build_id = direct["buildID"]
         self.assertTrue(template_id)
