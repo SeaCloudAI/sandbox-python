@@ -4,16 +4,30 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 
+class TemplateVolumeMount(TypedDict):
+    name: str
+    path: str
+
+
+class PublicTemplateExtensions(TypedDict, total=False):
+    baseTemplateID: str
+    visibility: str
+    envs: dict[str, str]
+    storageType: str
+    storageSizeGB: int
+    volumeMounts: list[TemplateVolumeMount]
+
+
 class TemplateCreateRequest(TypedDict, total=False):
     name: str
     tags: list[str]
     cpuCount: int
     memoryMB: int
-    extensions: dict[str, object]
+    extensions: PublicTemplateExtensions
 
 
 class TemplateUpdateRequest(TypedDict, total=False):
-    extensions: dict[str, object]
+    extensions: PublicTemplateExtensions
 
 
 @dataclass

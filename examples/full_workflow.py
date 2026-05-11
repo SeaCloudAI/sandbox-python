@@ -16,24 +16,14 @@ def _bootstrap_local_src() -> None:
 
 _bootstrap_local_src()
 
-from sandbox import Client, Template, default_build_logger
+from sandbox import Sandbox, Template, default_build_logger
 from sandbox.control.models import SandboxLogsParams
 
 
 def main() -> None:
-    base_url = must_env("SEACLOUD_BASE_URL")
-    api_key = must_env("SEACLOUD_API_KEY")
+    must_env("E2B_API_KEY")
     runtime_base_image = must_env("SANDBOX_EXAMPLE_RUNTIME_BASE_IMAGE")
     keep_resources = env_enabled("SANDBOX_EXAMPLE_KEEP_RESOURCES")
-
-    client = Client(
-        base_url=base_url,
-        api_key=api_key,
-        timeout=180,
-    )
-
-    log_metric_line("control", client.metrics)
-    log_metric_line("build", client.build.metrics)
 
     template_name = f"python-full-workflow-{time.time_ns()}"
     created_sandbox = None
@@ -42,7 +32,7 @@ def main() -> None:
     build_log_count = [0]
     build_logger = default_build_logger()
     try:
-        built = client.build_template(
+        built = Template.build(
             Template()
             .from_image(runtime_base_image)
             .run_cmd("mkdir -p /workspace && printf 'hello from python full workflow\\n' >/workspace/built-by-template.txt")
@@ -51,27 +41,28 @@ def main() -> None:
             wait=True,
             poll_interval=2.0,
             on_build_logs=lambda entry: _log_build_entry(entry, build_logger, build_log_count),
+            timeout=180.0,
         )
-        template_id = built["templateID"]
-        build_id = built["buildID"]
-        print("build ready:", template_id, build_id, built["status"])
-        print("build detail:", built.get("build", {}).get("status"), built.get("build", {}).get("image"))
+        template_id = built["template_id"]
+        build_id = built["build_id"]
+        print("build started:", template_id, build_id)
 
-        build_status = client.get_template_build_status(
-            {"templateID": template_id, "buildID": build_id},
+        build_status = Template.get_build_status(
+            {"template_id": template_id, "build_id": build_id},
             limit=20,
         )
+        print("build ready:", build_status.get("templateId"), build_status.get("buildId"), build_status.get("status"))
         print("build logs:", build_log_count[0], latest_build_log(build_status))
 
-        template_detail = client.get_template(template_id)
+        template_detail = Template.get(template_id)
         print(
             "template detail:",
             template_detail.get("templateID"),
             len(template_detail.get("builds", [])),
-            template_detail.get("extensions", {}).get("seacloud", {}).get("imageSource"),
+            template_detail.get("extensions", {}).get("imageSource"),
         )
 
-        created_sandbox = client.create(template_id, timeout=1800, waitReady=True)
+        created_sandbox = Sandbox.create(template_id, timeout=1800, waitReady=True)
         print("sandbox created:", created_sandbox.sandbox_id, created_sandbox.raw.get("status"))
 
         sandbox_detail = created_sandbox.reload()
@@ -121,7 +112,7 @@ def main() -> None:
                 print("delete sandbox warning:", error)
         if not keep_resources:
             try:
-                client.delete_template(template_id)
+                Template.delete(template_id)
                 print("deleted template:", template_id)
             except Exception as error:
                 print("delete template warning:", error)
@@ -136,21 +127,6 @@ def must_env(name: str) -> str:
 
 def env_enabled(name: str) -> bool:
     return os.getenv(name, "").strip().lower() in {"1", "true", "yes"}
-
-
-def first_non_empty_line(text: str) -> str:
-    for line in text.splitlines():
-        line = line.strip()
-        if line:
-            return line
-    return ""
-
-
-def log_metric_line(name: str, fn) -> None:
-    try:
-        print(f"{name} metrics:", first_non_empty_line(fn()))
-    except Exception as error:
-        print(f"{name} metrics warning:", error)
 
 
 def _log_build_entry(entry, logger, counter: list[int]) -> None:

@@ -5,13 +5,74 @@ import json
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import ANY
 
 import sandbox.template as template_module
-from sandbox import Client, LogEntry, Sandbox, Template, wait_for_port
+import sandbox._client as client_module
+from sandbox import LogEntry, Sandbox, Template, wait_for_port
+from sandbox._client import GatewayClient
+from sandbox.code_interpreter import CodeContext, CodeExecution
 from sandbox.core import APIError, NotFoundError, ServerError, ValidationError
 
 
 class FacadeSandboxTest(unittest.TestCase):
+    def test_sandbox_class_helpers_use_env_first_client(self) -> None:
+        calls: list[tuple[str, object]] = []
+
+        class MockClient:
+            def __init__(self, *args, **kwargs) -> None:
+                calls.append(("init", kwargs))
+
+            def create(self, template_or_options=None, **options):
+                calls.append(("create", {"template_or_options": template_or_options, "options": options}))
+                return "created"
+
+            def connect(self, sandbox_id, *, timeout=300):
+                calls.append(("connect", {"sandbox_id": sandbox_id, "timeout": timeout}))
+                return "connected"
+
+            def list(self, **options):
+                calls.append(("list", options))
+                return ["listed"]
+
+            def get_sandbox(self, sandbox_id):
+                calls.append(("get_sandbox", sandbox_id))
+                return {"sandboxID": sandbox_id}
+
+        import sandbox.facade as facade_module
+
+        original_facade_client = facade_module.GatewayClient
+        facade_module.GatewayClient = MockClient
+        try:
+            self.assertEqual(Sandbox.create("base", waitReady=True), "created")
+            self.assertEqual(Sandbox.connect("sb-1", timeout=60), "connected")
+            self.assertEqual(Sandbox.list(limit=10), ["listed"])
+            self.assertEqual(Sandbox.get_info("sb-1"), {"sandboxID": "sb-1"})
+        finally:
+            facade_module.GatewayClient = original_facade_client
+
+        self.assertEqual(calls[1], ("create", {"template_or_options": "base", "options": {"waitReady": True}}))
+        self.assertEqual(calls[3], ("connect", {"sandbox_id": "sb-1", "timeout": 60}))
+        self.assertEqual(calls[5], ("list", {"limit": 10}))
+        self.assertEqual(calls[7], ("get_sandbox", "sb-1"))
+
+    def test_gateway_client_create_defaults_to_base_template(self) -> None:
+        class MockClient(GatewayClient):
+            def __init__(self) -> None:
+                super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+
+            def create_sandbox(self, body):
+                self.body = dict(body)
+                return {
+                    "sandboxID": "sb-1",
+                    "templateID": body.get("templateID"),
+                }
+
+        client = MockClient()
+        created = client.create(waitReady=True)
+        self.assertEqual(client.body, {"templateID": "base", "waitReady": True})
+        self.assertEqual(created.raw["templateID"], "base")
+
     def test_bound_sandbox_uses_attached_client(self) -> None:
         class MockRuntime:
             def metrics(self):
@@ -64,10 +125,10 @@ class FacadeSandboxTest(unittest.TestCase):
 
         self.assertEqual(created.sandbox_id, "sb-1")
         self.assertEqual(reconnected.sandbox_id, "sb-1")
-        self.assertEqual(created.sandboxDomain, "runtime.cloud.seaart.ai")
+        self.assertEqual(created.sandbox_domain, "runtime.cloud.seaart.ai")
         self.assertTrue(created.is_running())
         self.assertEqual(created.get_metrics()["cpu"], 1)
-        self.assertEqual(created.commands.exec("echo hi")["exitCode"], 0)
+        self.assertEqual(created.commands.exec("echo hi")["exit_code"], 0)
         self.assertEqual(mock_client.connect_calls[0], ("sb-1", {"timeout": 120}))
         self.assertEqual(len(listed), 1)
         self.assertFalse(listed[0].is_running())
@@ -119,7 +180,7 @@ class FacadeSandboxTest(unittest.TestCase):
             depth=1,
         )
 
-        self.assertEqual(result["exitCode"], 0)
+        self.assertEqual(result["exit_code"], 0)
         self.assertEqual(result["stdout"], "ok\n")
         self.assertEqual(mock_client.runtime.calls[0], {
             "cmd": "git",
@@ -131,15 +192,14 @@ class FacadeSandboxTest(unittest.TestCase):
         })
         self.assertEqual(created.files.write("/tmp/hello.txt", "hello"), {
             "path": "/tmp/hello.txt",
-            "bytesWritten": 5,
             "bytes_written": 5,
         })
         self.assertEqual(created.files.write_files([
             {"path": "/tmp/a.txt", "content": "a"},
             {"path": "/tmp/b.txt", "content": "bb"},
         ]), [
-            {"path": "/tmp/a.txt", "bytesWritten": 1, "bytes_written": 1},
-            {"path": "/tmp/b.txt", "bytesWritten": 2, "bytes_written": 2},
+            {"path": "/tmp/a.txt", "bytes_written": 1},
+            {"path": "/tmp/b.txt", "bytes_written": 2},
         ])
 
     def test_filesystem_pty_proxy_and_extra_git_helpers(self) -> None:
@@ -350,6 +410,310 @@ class FacadeSandboxTest(unittest.TestCase):
             "input": {"pty": base64.b64encode(b"ls\n").decode("ascii")},
         }))
 
+    def test_commands_and_pty_accept_request_timeout_and_user(self) -> None:
+        class MockStream:
+            def __init__(self, frames) -> None:
+                self.frames = list(frames)
+
+            def next(self):
+                return self.frames.pop(0) if self.frames else None
+
+        class MockRuntime:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def run(self, body, options=None):
+                self.calls.append(("run", body, options))
+                return {"stdout": "ok\n", "stderr": "", "exit_code": 0, "duration_ms": 1}
+
+            def start(self, body, options=None):
+                self.calls.append(("start", body, options))
+                return MockStream([{"event": {"start": {"pid": 77}}}])
+
+        class MockClient:
+            def __init__(self) -> None:
+                self.runtime = MockRuntime()
+
+            def runtime_from_sandbox(self, sandbox):
+                return self.runtime
+
+        created = Sandbox(MockClient(), {
+            "sandboxID": "sb-user",
+            "templateID": "base",
+            "envdUrl": "https://runtime.cloud.seaart.ai/sb-user",
+            "envdAccessToken": "unit-runtime-auth",
+            "status": "running",
+            "state": "running",
+        })
+
+        created.commands.run("echo", args=["hello"], timeout=2, request_timeout=3.5, user="app")
+        created.pty.create("bash", timeout=4, request_timeout=5.5, user="root")
+
+        run_call = created._client.runtime.calls[0]
+        start_call = created._client.runtime.calls[1]
+        self.assertEqual(run_call[1]["cmd"], "sh")
+        self.assertIn("su -s /bin/sh 'app'", run_call[1]["args"][1])
+        self.assertEqual(run_call[2].request_timeout, 3.5)
+        self.assertEqual(start_call[1]["process"]["cmd"], "sh")
+        self.assertIn("su -s /bin/sh 'root'", start_call[1]["process"]["args"][1])
+        self.assertEqual(start_call[2].request_timeout, 5.5)
+
+    def test_run_code_uses_default_python_context_and_preserves_execution_state(self) -> None:
+        class MockResponse:
+            def __init__(self, body: str) -> None:
+                self._body = body.encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return None
+
+            def read(self) -> bytes:
+                return self._body
+
+        class MockStream:
+            def __init__(self, frames) -> None:
+                self.frames = list(frames)
+                self.closed = False
+
+            def next(self):
+                return self.frames.pop(0) if self.frames else None
+
+            def close(self):
+                self.closed = True
+
+        class MockRuntime:
+            def __init__(self) -> None:
+                self.calls = []
+                self.stream = MockStream([
+                    {"event": {"start": {"pid": 51}}},
+                    {"event": {"data": {
+                        "stdout": base64.b64encode((
+                            "__SEACLOUD_CODE_CONTEXT__" + json.dumps({
+                                "results": [{"text": "1", "json": 1}],
+                                "logs": {"stdout": ["hello\n"], "stderr": []},
+                                "executionCount": 1,
+                            }) + "\n"
+                        ).encode("utf-8")).decode("ascii"),
+                    }}},
+                    {"event": {"data": {
+                        "stdout": base64.b64encode((
+                            "__SEACLOUD_CODE_CONTEXT__" + json.dumps({
+                                "results": [{"text": "2", "json": 2}],
+                                "logs": {"stdout": [], "stderr": ["warn\n"]},
+                                "executionCount": 2,
+                            }) + "\n"
+                        ).encode("utf-8")).decode("ascii"),
+                    }}},
+                ])
+
+            def write_file(self, request, options=None):
+                self.calls.append(("write_file", request.path))
+
+            def start(self, body, options=None):
+                self.calls.append(("start", body))
+                return self.stream
+
+            def send_input(self, body, options=None):
+                self.calls.append(("send_input", body))
+
+            def remove(self, body, options=None):
+                self.calls.append(("remove", body["path"]))
+
+        class MockClient:
+            def __init__(self) -> None:
+                self.runtime = MockRuntime()
+
+            def runtime_from_sandbox(self, sandbox):
+                return self.runtime
+
+        stdout = []
+        stderr = []
+        results = []
+        errors = []
+        created = Sandbox(MockClient(), {
+            "sandboxID": "sb-code",
+            "templateID": "base",
+            "envdUrl": "https://runtime.cloud.seaart.ai/sb-code",
+            "envdAccessToken": "unit-runtime-auth",
+            "status": "running",
+            "state": "running",
+        })
+
+        execution1 = created.run_code(
+            "print(42)",
+            cwd="/workspace",
+            timeout=30,
+            on_stdout=lambda chunk: stdout.append(chunk),
+            on_stderr=lambda chunk: stderr.append(chunk),
+            on_result=lambda result: results.append(result),
+            on_error=lambda error: errors.append(error),
+        )
+        execution2 = created.run_code(
+            "print(43)",
+            on_stdout=lambda chunk: stdout.append(chunk),
+            on_stderr=lambda chunk: stderr.append(chunk),
+            on_result=lambda result: results.append(result),
+            on_error=lambda error: errors.append(error),
+        )
+
+        self.assertIsInstance(execution1, CodeExecution)
+        self.assertEqual(execution1.results[0].text, "1")
+        self.assertEqual(execution2.results[0].text, "2")
+        self.assertEqual(execution1.logs.stdout, ["hello\n"])
+        self.assertEqual(execution2.logs.stderr, ["warn\n"])
+        self.assertEqual(stdout[0].line, "hello\n")
+        self.assertEqual(stderr[0].line, "warn\n")
+        self.assertEqual(results[0].json, 1)
+        self.assertEqual(results[1].json, 2)
+        self.assertEqual(errors, [])
+        self.assertEqual(created._client.runtime.calls[1], ("start", {
+            "process": {
+                "cmd": "python3",
+                "args": [ANY, ANY],
+                "cwd": "/workspace",
+            },
+            "stdin": True,
+            "timeout": 30,
+        }))
+        send_inputs = [call for call in created._client.runtime.calls if call[0] == "send_input"]
+        self.assertEqual(len(send_inputs), 2)
+
+    def test_explicit_code_context_lifecycle(self) -> None:
+        class MockStream:
+            def __init__(self) -> None:
+                self.frames = [{"event": {"start": {"pid": 77}}}]
+                self.closed = False
+
+            def next(self):
+                return self.frames.pop(0) if self.frames else None
+
+            def close(self):
+                self.closed = True
+
+        class MockRuntime:
+            def __init__(self) -> None:
+                self.calls = []
+                self.streams = [MockStream(), MockStream()]
+
+            def write_file(self, request, options=None):
+                self.calls.append(("write_file", request.path))
+
+            def start(self, body, options=None):
+                self.calls.append(("start", body))
+                return self.streams.pop(0)
+
+            def send_signal(self, body, options=None):
+                self.calls.append(("send_signal", body))
+
+            def remove(self, body, options=None):
+                self.calls.append(("remove", body["path"]))
+
+        class MockClient:
+            def __init__(self) -> None:
+                self.runtime = MockRuntime()
+
+            def runtime_from_sandbox(self, sandbox):
+                return self.runtime
+
+        created = Sandbox(MockClient(), {
+            "sandboxID": "sb-context",
+            "templateID": "base",
+            "envdUrl": "https://runtime.cloud.seaart.ai/sb-context",
+            "envdAccessToken": "unit-runtime-auth",
+            "status": "running",
+            "state": "running",
+        })
+
+        context = created.create_code_context(cwd="/workspace", language="python", timeout=10)
+        self.assertIsInstance(context, CodeContext)
+        self.assertEqual(len(created.list_code_contexts()), 1)
+        restarted = created.restart_code_context(context)
+        self.assertEqual(restarted.context_id, context.context_id)
+        created.remove_code_context(context.context_id)
+
+        starts = [call for call in created._client.runtime.calls if call[0] == "start"]
+        signals = [call for call in created._client.runtime.calls if call[0] == "send_signal"]
+        removes = [call for call in created._client.runtime.calls if call[0] == "remove"]
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(len(signals), 2)
+        self.assertEqual(len(removes), 2)
+
+    def test_non_python_code_context_behaves_as_stateless_execution_profile(self) -> None:
+        class MockStream:
+            def __init__(self, frames) -> None:
+                self.frames = list(frames)
+                self.closed = False
+
+            def next(self):
+                return self.frames.pop(0) if self.frames else None
+
+            def close(self):
+                self.closed = True
+
+        class MockRuntime:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def write_file(self, request, options=None):
+                self.calls.append(("write_file", request.path))
+
+            def start(self, body, options=None):
+                self.calls.append(("start", body))
+                return MockStream([
+                    {"event": {"start": {"pid": 88, "cmdId": "cmd-bash"}}},
+                    {"event": {"data": {"stdout": base64.b64encode(b"hi\n").decode("ascii")}}},
+                    {"event": {"end": {"exited": True, "status": "exit status 0", "error": None}}},
+                ])
+
+            def get_result(self, body, options=None):
+                self.calls.append(("get_result", body))
+                return {"exitCode": 0, "stdout": "hi\n", "stderr": ""}
+
+            def remove(self, body, options=None):
+                self.calls.append(("remove", body["path"]))
+
+        class MockClient:
+            def __init__(self) -> None:
+                self.runtime = MockRuntime()
+                self.deleted = []
+
+            def runtime_from_sandbox(self, sandbox):
+                return self.runtime
+
+            def delete_sandbox(self, sandbox_id):
+                self.deleted.append(sandbox_id)
+
+        created = Sandbox(MockClient(), {
+            "sandboxID": "sb-stateless-context",
+            "templateID": "base",
+            "envdUrl": "https://runtime.cloud.seaart.ai/sb-stateless-context",
+            "envdAccessToken": "unit-runtime-auth",
+            "status": "running",
+            "state": "running",
+        })
+
+        context = created.create_code_context(cwd="/workspace/app", language="bash", timeout=12)
+        execution = created.run_code("echo hi", context=context)
+
+        self.assertEqual(context.language, "bash")
+        self.assertEqual(len(created.list_code_contexts()), 1)
+        self.assertEqual(created.restart_code_context(context).context_id, context.context_id)
+        self.assertEqual(execution.text, "hi\n")
+        self.assertEqual(created._client.runtime.calls[1], ("start", {
+            "process": {
+                "cmd": "bash",
+                "args": [ANY],
+                "cwd": "/workspace/app",
+            },
+            "timeout": 12,
+        }))
+        created.remove_code_context(context)
+        self.assertEqual(created.list_code_contexts(), [])
+        created.kill()
+        self.assertEqual(created._client.deleted, ["sb-stateless-context"])
+
 
 class FacadeTemplateTest(unittest.TestCase):
     def test_build_uses_template_dsl_and_polls_until_ready(self) -> None:
@@ -388,7 +752,7 @@ class FacadeTemplateTest(unittest.TestCase):
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
         logs: list[str] = []
-        client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         client.build = MockBuildService()
         built = client.build_template(
             Template().from_image("docker.io/library/node:20").run_cmd("npm install").set_start_cmd("npm start", wait_for_port(3000)),
@@ -398,12 +762,11 @@ class FacadeTemplateTest(unittest.TestCase):
             on_build_logs=lambda entry: logs.append(str(entry)),
         )
 
-        self.assertEqual(built["templateID"], "tpl-1")
-        self.assertEqual(built["status"], "ready")
+        self.assertEqual(built["template_id"], "tpl-1")
         self.assertEqual(calls[1][1], {
             "name": "demo",
             "tags": ["v1"],
-            "extensions": {"seacloud": {"baseTemplateID": "tpl-base-1"}},
+            "extensions": {"baseTemplateID": "tpl-base-1"},
         })
         create_build_body = calls[2][1]["body"]
         self.assertEqual(create_build_body["fromImage"], "docker.io/library/node:20")
@@ -434,16 +797,16 @@ class FacadeTemplateTest(unittest.TestCase):
             def get_build_status(self, template_id, build_id, params):
                 raise AssertionError("get_build_status should not be called for background builds")
 
-        client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         client.build = MockBuildService()
         built = client.build_template_in_background(
             Template().from_image("docker.io/library/node:20"),
             "demo:v2",
         )
 
-        self.assertEqual(built["templateID"], "tpl-bg")
-        self.assertEqual(built["status"], "building")
-        self.assertEqual([name for name, _ in calls], ["init", "create_template", "create_build", "get_template"])
+        self.assertEqual(built["template_id"], "tpl-bg")
+        self.assertTrue(str(built["build_id"]).startswith("build-"))
+        self.assertEqual([name for name, _ in calls], ["init", "create_template", "create_build"])
 
     def test_build_forwards_high_level_options_and_dedupes_tags(self) -> None:
         calls: list[tuple[str, object]] = []
@@ -470,7 +833,7 @@ class FacadeTemplateTest(unittest.TestCase):
             def get_build(self, template_id, build_id):
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
-        client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         client.build = MockBuildService()
         built = client.build_template(
             Template().from_image("docker.io/library/node:20"),
@@ -482,14 +845,14 @@ class FacadeTemplateTest(unittest.TestCase):
             poll_interval=0.0,
         )
 
-        self.assertEqual(built["templateID"], "tpl-options")
+        self.assertEqual(built["template_id"], "tpl-options")
         self.assertEqual(built["tags"], ["v1", "latest"])
         self.assertEqual(calls[1][1], {
             "name": "demo",
             "tags": ["v1", "latest"],
             "cpuCount": 2,
             "memoryMB": 1024,
-            "extensions": {"seacloud": {"baseTemplateID": "tpl-base-1"}},
+            "extensions": {"baseTemplateID": "tpl-base-1"},
         })
         self.assertEqual(calls[3][1].logs_offset, 0)
         self.assertEqual(calls[3][1].limit, 100)
@@ -513,10 +876,10 @@ class FacadeTemplateTest(unittest.TestCase):
                 calls.append(("get_build_status", {"template_id": template_id, "build_id": build_id, "params": params}))
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
-        client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         client.build = MockBuildService()
         self.assertTrue(client.template_exists("demo"))
-        status = client.get_template_build_status({"templateId": "tpl-1", "buildId": "build-1"})
+        status = client.get_template_build_status({"template_id": "tpl-1", "build_id": "build-1"})
 
         self.assertEqual(status["status"], "ready")
 
@@ -543,17 +906,17 @@ class FacadeTemplateTest(unittest.TestCase):
                 calls.append(("get_build_status", {"template_id": template_id, "build_id": build_id, "params": params}))
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
-        client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         client.build = MockBuildService()
 
         self.assertFalse(client.template_exists("missing"))
         with self.assertRaises(APIError):
             client.template_exists("broken")
         with self.assertRaises(ValidationError):
-            client.get_template_build_status({"templateID": " ", "buildID": "build-1"})
+            client.get_template_build_status({"template_id": " ", "build_id": "build-1"})
 
         status = client.get_template_build_status(
-            {"templateID": "tpl-1", "buildID": "build-1"},
+            {"template_id": "tpl-1", "build_id": "build-1"},
             logs_offset=0,
             limit=100,
             level="info",
@@ -588,7 +951,7 @@ class FacadeTemplateTest(unittest.TestCase):
             def delete_template(self, template_id):
                 calls.append(("delete_template", template_id))
 
-        client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         client.build = MockBuildService()
         listed = client.list_templates({"visibility": "team"})
         detail = client.get_template("demo")
@@ -624,7 +987,7 @@ class FacadeTemplateTest(unittest.TestCase):
             def delete_template(self, template_id):
                 calls.append(("delete_template", template_id))
 
-        client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
         client.build = MockBuildService()
         listed = client.list_templates({
             "visibility": "team",
@@ -688,19 +1051,22 @@ class FacadeTemplateTest(unittest.TestCase):
         request = (
             Template()
             .skip_cache()
-            .copy_items([{"src": "package.json", "dest": "/app/", "files_hash": "a" * 64}])
+            .copy_items([{"src": "package.json", "dest": "/app/", "files_hash": "a" * 64, "user": "app"}])
             .remove("/tmp/cache", recursive=True, force=True, user="root")
             .rename("/tmp/old.txt", "/tmp/new.txt", user="root")
             .request()
         )
 
-        self.assertEqual(len(request["steps"]), 3)
+        self.assertEqual(len(request["steps"]), 4)
         self.assertEqual(request["steps"][0]["type"], "COPY")
         self.assertTrue(request["steps"][0]["force"])
-        self.assertIn("rm", request["steps"][1]["args"][0])
+        self.assertIn("chown", request["steps"][1]["args"][0])
+        self.assertIn("app", request["steps"][1]["args"][0])
         self.assertTrue(request["steps"][1]["force"])
-        self.assertIn("mv", request["steps"][2]["args"][0])
+        self.assertIn("rm", request["steps"][2]["args"][0])
         self.assertTrue(request["steps"][2]["force"])
+        self.assertIn("mv", request["steps"][3]["args"][0])
+        self.assertTrue(request["steps"][3]["force"])
 
     def test_template_supports_run_cmd_user_and_copy_tar_options(self) -> None:
         with TemporaryDirectory() as tmp:
@@ -858,10 +1224,10 @@ class FacadeTemplateTest(unittest.TestCase):
             with TemporaryDirectory() as tmp:
                 source = Path(tmp) / "hello.txt"
                 source.write_text("hello copy\n", encoding="utf-8")
-                client = Client(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+                client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
                 client.build = MockBuildService()
                 client.build_template(
-                    Template().from_image("docker.io/library/alpine:3.20").copy(str(source), "/app/"),
+                    Template().from_image("docker.io/library/alpine:3.20").copy(str(source), "/app/", user="app"),
                     "demo:auto-copy",
                     poll_interval=0.0,
                 )
@@ -875,6 +1241,76 @@ class FacadeTemplateTest(unittest.TestCase):
         create_build_body = calls[1][1]
         self.assertRegex(create_build_body["steps"][0]["filesHash"], r"^[a-f0-9]{64}$")
         self.assertEqual(create_build_body["steps"][0]["args"][0], "hello.txt")
+        self.assertEqual(create_build_body["steps"][1]["type"], "RUN")
+        self.assertIn("chown", create_build_body["steps"][1]["args"][0])
+        self.assertIn("app", create_build_body["steps"][1]["args"][0])
+
+    def test_template_class_helpers_use_env_first_client(self) -> None:
+        calls: list[tuple[str, object]] = []
+
+        class MockClient:
+            def __init__(self, **kwargs) -> None:
+                calls.append(("init", kwargs))
+
+            def build_template(self, template, name, **options):
+                calls.append(("build_template", {"template": template, "name": name, "options": options}))
+                return {"template_id": "tpl-1"}
+
+            def build_template_in_background(self, template, name, **options):
+                calls.append(("build_template_in_background", {"template": template, "name": name, "options": options}))
+                return {"template_id": "tpl-bg"}
+
+            def list_templates(self, params=None):
+                calls.append(("list_templates", params))
+                return [{"templateID": "tpl-1"}]
+
+            def get_template(self, ref, params=None):
+                calls.append(("get_template", {"ref": ref, "params": params}))
+                return {"templateID": ref}
+
+            def delete_template(self, ref):
+                calls.append(("delete_template", ref))
+
+            def template_exists(self, ref):
+                calls.append(("template_exists", ref))
+                return True
+
+            def get_template_build_status(self, data, **options):
+                calls.append(("get_template_build_status", {"data": data, "options": options}))
+                return {"status": "ready"}
+
+        original_client = client_module.GatewayClient
+        client_module.GatewayClient = MockClient
+        try:
+            template = Template().from_image("docker.io/library/alpine:3.20")
+            self.assertEqual(
+                Template.build(template, "demo:v1", api_key="unit-auth-value", base_url="https://sandbox-gateway.cloud.seaart.ai")["template_id"],
+                "tpl-1",
+            )
+            self.assertEqual(Template.build_in_background(template, "demo:v1")["template_id"], "tpl-bg")
+            self.assertEqual(Template.list(limit=10), [{"templateID": "tpl-1"}])
+            self.assertEqual(Template.get("tpl-1", params={"limit": 5})["templateID"], "tpl-1")
+            Template.delete("tpl-1")
+            self.assertTrue(Template.exists("tpl-1"))
+            self.assertEqual(
+                Template.get_build_status({"template_id": "tpl-1", "build_id": "build-1"}, limit=10)["status"],
+                "ready",
+            )
+        finally:
+            client_module.GatewayClient = original_client
+
+        self.assertEqual(calls[0], ("init", {
+            "base_url": "https://sandbox-gateway.cloud.seaart.ai",
+            "api_key": "unit-auth-value",
+            "timeout": 30.0,
+        }))
+        self.assertEqual(calls[1][0], "build_template")
+        self.assertIn(("list_templates", {"limit": 10}), calls)
+        self.assertIn(("get_template", {"ref": "tpl-1", "params": {"limit": 5}}), calls)
+        self.assertGreaterEqual(calls.count(("init", {
+            "timeout": 30.0,
+        })), 1)
+        self.assertEqual(calls[-1], ("get_template_build_status", {"data": {"template_id": "tpl-1", "build_id": "build-1"}, "options": {"limit": 10}}))
 
 
 if __name__ == "__main__":

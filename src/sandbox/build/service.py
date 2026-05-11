@@ -315,20 +315,12 @@ class BuildService(BaseTransport):
     def _validate_template_extensions(self, extensions) -> None:
         if not isinstance(extensions, dict):
             raise ValidationError("extensions must be an object")
+        allowed = {"baseTemplateID", "visibility", "envs", "storageType", "storageSizeGB", "volumeMounts"}
         for key in extensions.keys():
-            if key != "seacloud":
-                raise ValidationError(f"template extension {key} is not supported by the public SDK")
-        seacloud = extensions.get("seacloud")
-        if seacloud is None:
-            return
-        if not isinstance(seacloud, dict):
-            raise ValidationError("extensions.seacloud must be an object")
-        allowed = {"baseTemplateID", "visibility", "envs", "storageType", "storageSizeGB"}
-        for key in seacloud.keys():
             if key not in allowed:
                 raise ValidationError(f"template extension field {key} is not supported by the public SDK")
-        if str(seacloud.get("visibility", "")).strip() == "official":
-            raise ValidationError("extensions.seacloud.visibility=official is not supported by the public SDK")
+        if str(extensions.get("visibility", "")).strip() == "official":
+            raise ValidationError("extensions.visibility=official is not supported by the public SDK")
 
     def _validate_build_status_params(self, params: BuildStatusParams | None) -> None:
         if params is None:

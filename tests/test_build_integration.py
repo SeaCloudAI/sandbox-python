@@ -84,7 +84,7 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
             self.assertIsInstance(detail.get("builds", []), list)
 
             updated = self.service.update_template(template_id, {
-                "extensions": {"seacloud": {"envs": {"SDK_TEST": "1"}}},
+                "extensions": {"envs": {"SDK_TEST": "1"}},
             })
             self.assertTrue(updated["names"])
 

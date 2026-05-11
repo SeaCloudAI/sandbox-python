@@ -205,7 +205,7 @@ class BuildServiceUnitTest(unittest.TestCase):
             GetTemplateParams(limit=10, next_token="build-1"),
         )
         updated = service.update_template("tpl-1", {
-            "extensions": {"seacloud": {"envs": {"SDK_TEST": "1"}}},
+            "extensions": {"envs": {"SDK_TEST": "1"}},
         })
         service.delete_template("tpl-1")
 
@@ -356,7 +356,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             service.create_build("tpl-1", "build-test", {"buildID": "build-body"})
         with self.assertRaises(ValidationError):
-            service.create_build("tpl-1", "build-test", {"extensions": {"seacloud": {"filesHash": "bad"}}})
+            service.create_build("tpl-1", "build-test", {"extensions": {"filesHash": "bad"}})
         with self.assertRaises(ValidationError):
             service.create_build("tpl-1", "build-test", {
                 "steps": [{"type": "ENV", "args": ["NODE_ENV"]}],
@@ -382,21 +382,21 @@ class BuildServiceUnitTest(unittest.TestCase):
         accepting_update = MockBuildService(lambda request: FakeResponse(200, json.dumps({"names": ["user/demo"]})))
         accepting_create.create_template({
             "name": "demo",
-            "extensions": {"seacloud": {"baseTemplateID": "tpl-base-1", "visibility": "team"}},
+            "extensions": {"baseTemplateID": "tpl-base-1", "visibility": "team", "volumeMounts": [{"name": "cache", "path": "/cache"}]},
         })
-        with self.assertRaisesRegex(ValidationError, "extensions.seacloud.visibility=official is not supported by the public SDK"):
+        with self.assertRaisesRegex(ValidationError, "extensions.visibility=official is not supported by the public SDK"):
             service.create_template({
                 "name": "demo",
-                "extensions": {"seacloud": {"visibility": "official"}},
+                "extensions": {"visibility": "official"},
             })
         with self.assertRaisesRegex(ValidationError, "template field visibility is not supported by the public SDK"):
             service.update_template("tpl-1", {"visibility": "official"})
         accepting_update.update_template("tpl-1", {
-            "extensions": {"seacloud": {"baseTemplateID": "tpl-base-2", "storageType": "persistent"}},
+            "extensions": {"baseTemplateID": "tpl-base-2", "storageType": "persistent", "volumeMounts": [{"name": "cache", "path": "/cache"}]},
         })
-        with self.assertRaisesRegex(ValidationError, "extensions.seacloud.visibility=official is not supported by the public SDK"):
+        with self.assertRaisesRegex(ValidationError, "extensions.visibility=official is not supported by the public SDK"):
             service.update_template("tpl-1", {
-                "extensions": {"seacloud": {"visibility": "official"}},
+                "extensions": {"visibility": "official"},
             })
         with self.assertRaisesRegex(ValidationError, "template field type is not supported by the public SDK"):
             service.create_template({
@@ -505,7 +505,7 @@ class BuildServiceUnitTest(unittest.TestCase):
             if request.full_url.endswith("/api/v1/templates") and request.get_method() == "POST":
                 self.assertEqual(json.loads(request.data.decode("utf-8")), {
                     "name": "demo",
-                    "extensions": {"seacloud": {"baseTemplateID": "tpl-base-1"}},
+                    "extensions": {"baseTemplateID": "tpl-base-1"},
                 })
                 return FakeResponse(202, json.dumps({"templateID": "tpl-1"}))
             self.fail(f"unexpected request: {request.get_method()} {request.full_url}")
@@ -515,5 +515,5 @@ class BuildServiceUnitTest(unittest.TestCase):
             "name": "demo",
             "cpuCount": None,
             "memoryMB": None,
-            "extensions": {"seacloud": {"baseTemplateID": "tpl-base-1", "visibility": None}},
+            "extensions": {"baseTemplateID": "tpl-base-1", "visibility": None},
         })

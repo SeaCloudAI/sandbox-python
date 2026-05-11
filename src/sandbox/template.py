@@ -54,6 +54,61 @@ class LogEntryEnd(LogEntry):
 class Template:
     """High-level template builder with E2B-style helpers."""
 
+    @classmethod
+    def build(
+        cls,
+        template: "Template",
+        name: str,
+        **options: Any,
+    ) -> dict[str, Any]:
+        client = _new_client_from_gateway_options(options)
+        return client.build_template(template, name, **options)
+
+    @classmethod
+    def build_in_background(
+        cls,
+        template: "Template",
+        name: str,
+        **options: Any,
+    ) -> dict[str, Any]:
+        client = _new_client_from_gateway_options(options)
+        return client.build_template_in_background(template, name, **options)
+
+    @classmethod
+    def list(cls, **options: Any) -> list[dict[str, Any]]:
+        client = _new_client_from_gateway_options(options)
+        return client.list_templates(options or None)
+
+    @classmethod
+    def get(
+        cls,
+        ref: str,
+        *,
+        params: Mapping[str, Any] | None = None,
+        **options: Any,
+    ) -> dict[str, Any]:
+        client = _new_client_from_gateway_options(options)
+        return client.get_template(ref, params)
+
+    @classmethod
+    def delete(cls, ref: str, **options: Any) -> None:
+        client = _new_client_from_gateway_options(options)
+        client.delete_template(ref)
+
+    @classmethod
+    def exists(cls, ref: str, **options: Any) -> bool:
+        client = _new_client_from_gateway_options(options)
+        return client.template_exists(ref)
+
+    @classmethod
+    def get_build_status(
+        cls,
+        data: Mapping[str, Any],
+        **options: Any,
+    ) -> dict[str, Any]:
+        client = _new_client_from_gateway_options(options)
+        return client.get_template_build_status(data, **options)
+
     def __init__(self) -> None:
         self._builder = TemplateBuildBuilder()
         self._auto_copies: dict[str, dict[str, Any]] = {}
@@ -160,6 +215,7 @@ class Template:
         force_upload: bool | None = None,
         mode: int | None = None,
         resolve_symlinks: bool | None = None,
+        user: str | None = None,
     ) -> "Template":
         """Copy one or more local sources into the template build context."""
         sources = src if isinstance(src, list) else [src]
@@ -171,6 +227,8 @@ class Template:
                 resolve_symlinks=bool(resolve_symlinks),
             )
             self._builder.copy(source, dest, resolved_hash, force=self._step_force())
+            if user and user.strip():
+                self._builder.run(_build_copy_ownership_command(dest, user), force=self._step_force())
         return self
 
     def copy_items(self, items: list[dict[str, Any]]) -> "Template":
@@ -182,6 +240,7 @@ class Template:
                 force_upload=item.get("force_upload", item.get("forceUpload")),
                 mode=item.get("mode"),
                 resolve_symlinks=item.get("resolve_symlinks", item.get("resolveSymlinks")),
+                user=item.get("user"),
             )
         return self
 
@@ -337,7 +396,7 @@ class Template:
         request = self._builder.to_request()
         for step in request.get("steps", []):
             if step.get("type") == "COPY" and str(step.get("filesHash") or "").startswith(_AUTO_COPY_PREFIX):
-                raise ValidationError("copy steps without files_hash require client.build_template()")
+                raise ValidationError("copy steps without files_hash require Template.build()")
         return request
 
     def build_with_service(
@@ -363,9 +422,7 @@ class Template:
         }
         if base_template_id is not None and base_template_id.strip():
             create_body["extensions"] = {
-                "seacloud": {
-                    "baseTemplateID": base_template_id.strip(),
-                },
+                "baseTemplateID": base_template_id.strip(),
             }
         created = service.create_template(_drop_none(create_body))
         build_id = f"build-{int(time.time() * 1000):x}"
@@ -381,22 +438,21 @@ class Template:
         service.create_build(created["templateID"], build_id, request)
         if not wait:
             return {
-                "templateID": created["templateID"],
-                "buildID": build_id,
+                "template_id": created["templateID"],
+                "build_id": build_id,
                 "name": template_name,
                 "tags": final_tags,
-                "status": "building",
-                "template": service.get_template(created["templateID"]),
+                "alias": (created.get("aliases") or [None])[0],
             }
 
         logs_offset = 0
         status: dict[str, Any] | None = None
         while True:
-            status = service.get_build_status(
+            status = _normalize_build_status_response(service.get_build_status(
                 created["templateID"],
                 build_id,
                 BuildStatusParams(logs_offset=logs_offset, limit=100),
-            )
+            ))
             log_entries = status.get("logEntries") or []
             logs_offset += len(log_entries)
             if on_build_logs is not None:
@@ -414,13 +470,11 @@ class Template:
             on_build_logs(LogEntryEnd(time.time(), f"Build {build_id} finished with status {status.get('status')}"))
 
         return {
-            "templateID": created["templateID"],
-            "buildID": build_id,
+            "template_id": created["templateID"],
+            "build_id": build_id,
             "name": template_name,
             "tags": final_tags,
-            "status": status["status"],
-            "template": service.get_template(created["templateID"]),
-            "build": service.get_build(created["templateID"], build_id),
+            "alias": (created.get("aliases") or [None])[0],
         }
 
     @classmethod
@@ -507,6 +561,21 @@ def _build_with_service(
     )
 
 
+def _new_client_from_gateway_options(options: dict[str, Any]):
+    from ._client import GatewayClient
+
+    request_timeout = options.pop("request_timeout", None)
+    client_options = {
+        "domain": options.pop("domain", None),
+        "base_url": options.pop("base_url", None),
+        "api_key": options.pop("api_key", None),
+        "project_id": options.pop("project_id", None),
+        "request_timeout": request_timeout,
+        "timeout": float(request_timeout if request_timeout is not None else options.pop("timeout", 30.0)),
+    }
+    return GatewayClient(**{key: value for key, value in client_options.items() if value is not None})
+
+
 def _template_exists_with_service(service: BuildService, ref: str) -> bool:
     try:
         _get_template_with_service(service, ref)
@@ -523,17 +592,25 @@ def _get_template_build_status_with_service(
     limit: int | None = None,
     level: str | None = None,
 ) -> dict[str, Any]:
-    template_id = str(data.get("template_id") or data.get("templateId") or data.get("templateID") or "").strip()
-    build_id = str(data.get("build_id") or data.get("buildId") or data.get("buildID") or "").strip()
+    template_id = str(data.get("template_id") or "").strip()
+    build_id = str(data.get("build_id") or "").strip()
     if not template_id:
         raise ValidationError("template_id is required")
     if not build_id:
         raise ValidationError("build_id is required")
-    return service.get_build_status(
+    return _normalize_build_status_response(service.get_build_status(
         template_id,
         build_id,
         BuildStatusParams(logs_offset=logs_offset, limit=limit, level=level),
-    )
+    ))
+
+
+def _normalize_build_status_response(response: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        **response,
+        "template_id": str(response.get("templateID") or response.get("template_id") or ""),
+        "build_id": str(response.get("buildID") or response.get("build_id") or ""),
+    }
 
 
 def _list_templates_with_service(
@@ -596,10 +673,10 @@ def wait_for_process(process_name: str) -> ReadyCmd:
     return ReadyCmd(f"pgrep -f {_shell_quote(process_name)} >/dev/null")
 
 
-def wait_for_timeout(timeout_ms: int) -> ReadyCmd:
-    if timeout_ms < 1000:
-        raise ValidationError("timeout must be at least 1000ms")
-    return ReadyCmd(f"sleep {(timeout_ms + 999) // 1000}")
+def wait_for_timeout(timeout: int) -> ReadyCmd:
+    if timeout <= 0:
+        raise ValidationError("timeout must be a positive integer")
+    return ReadyCmd(f"sleep {int(timeout)}")
 
 
 def wait_for_url(url: str, status_code: int = 200) -> ReadyCmd:
@@ -666,6 +743,10 @@ def _build_make_dir_command(path: str, *, mode: int | None, user: str | None) ->
         args.extend(["-m", _format_file_mode(mode)])
     args.append(path)
     return _maybe_run_as_user(_shell_join(args), user)
+
+
+def _build_copy_ownership_command(path: str, user: str) -> str:
+    return _shell_join(["chown", "-R", user.strip(), path.strip()])
 
 
 def _build_make_symlink_command(src: str, dest: str, *, user: str | None, force: bool) -> str:
