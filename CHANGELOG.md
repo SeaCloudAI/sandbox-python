@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 This project follows Semantic Versioning for public SDK APIs.
 
+## [0.2.0] - 2026-05-11
+
+### Changed
+
+- Removed the old client-first entrypoint and aligned the public SDK flow around environment-based configuration plus E2B-style static helpers.
+- Added high-level code interpreter helpers and examples on top of the current runtime APIs.
+- Narrowed public template create/update writes to the current builder contract and removed legacy fields such as `workspaceId`.
+- Updated examples, tests, and release docs to match the new no-backward-compat API surface.
+
 ## [0.1.4] - 2026-05-08
 
 ### Fixed
