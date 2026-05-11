@@ -252,6 +252,7 @@ Low-level `BuildService` from `sandbox.build` exposes:
 - builds: `create_build`, `get_build_file`, `rollback_template`, `list_builds`, `get_build`, `get_build_status`, `get_build_logs`
 
 The public template contract is split into three layers: top-level create fields (`name`, `tags`, `cpuCount`, `memoryMB`), template extensions under `extensions` (`baseTemplateID`, `visibility`, `envs`, `storageType`, `storageSizeGB`, `volumeMounts`), and build-only fields on `create_build` (`fromImage`, `fromTemplate`, `steps`, `startCmd`, `readyCmd`, registry credentials, `filesHash`).
+When `extensions.storageType="nfs"`, the public API still does not expose `nfsHostPath`; each `volumeMounts[i].name` is treated as the per-sandbox NFS subdirectory name under the inherited base template's NFS root, and `volumeMounts[i].path` is the container mount path. A mount named `workspace` becomes the primary workspace path.
 Runtime behavior defaults from the image source: templates inheriting SeaCloud base/runtime templates keep the managed runtime, while direct external images run as plain business containers. `startCmd` and `readyCmd` only provide startup and readiness commands on top of that default.
 Public create/update calls reject legacy top-level write fields such as `alias`, `teamID`, and `public`.
 
