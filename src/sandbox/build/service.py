@@ -33,6 +33,7 @@ _BUILD_REQUEST_FIELDS = {
     "force",
     "steps",
     "filesHash",
+    "runtimeMode",
     "startCmd",
     "readyCmd",
 }
@@ -261,6 +262,9 @@ class BuildService(BaseTransport):
         files_hash = str(body.get("filesHash", "")).strip()
         if files_hash and not self._is_sha256(files_hash):
             raise ValidationError("filesHash must be a 64-character lowercase hex SHA256")
+        runtime_mode = str(body.get("runtimeMode", "")).strip()
+        if runtime_mode and runtime_mode not in {"managed", "plain"}:
+            raise ValidationError('runtimeMode must be "managed" or "plain"')
         if body.get("force") is not None and not isinstance(body.get("force"), bool):
             raise ValidationError("force must be a boolean")
         if body.get("fromImageRegistry") is not None:
@@ -408,7 +412,7 @@ class BuildService(BaseTransport):
             body.get("fromImage", "")
         ).strip() and body.get("fromImageRegistry") is None and body.get("force") is None and not (
             body.get("steps") or []
-        ) and not str(body.get("filesHash", "")).strip() and not str(body.get("startCmd", "")).strip() and not str(
+        ) and not str(body.get("filesHash", "")).strip() and not str(body.get("runtimeMode", "")).strip() and not str(body.get("startCmd", "")).strip() and not str(
             body.get("readyCmd", "")
         ).strip()
 
