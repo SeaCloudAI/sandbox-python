@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import socket
 from typing import Any, Mapping
 from urllib.error import HTTPError
@@ -10,21 +11,26 @@ from urllib.request import Request, urlopen
 from .._version import SDK_VERSION
 from .exceptions import APIError, ConfigurationError, RequestTimeoutError, create_api_error
 
+DEFAULT_BASE_URL = "https://sandbox-gateway.cloud.seaart.ai"
+
 
 class BaseTransport:
     """Shared HTTP transport for the Sandbox SDK."""
 
     def __init__(
         self,
-        base_url: str,
-        api_key: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
         *,
-        project_id: str = "",
+        domain: str | None = None,
+        project_id: str | None = None,
         timeout: float = 30.0,
+        request_timeout: float | None = None,
     ) -> None:
-        normalized_base_url = base_url.strip().rstrip("/")
-        normalized_api_key = api_key.strip()
-        normalized_project_id = project_id.strip()
+        normalized_base_url = _resolve_base_url(base_url=base_url, domain=domain)
+        normalized_api_key = (api_key or os.getenv("E2B_API_KEY") or "").strip()
+        normalized_project_id = (project_id or os.getenv("SEACLOUD_PROJECT_ID") or "").strip()
+        resolved_timeout = timeout if request_timeout is None else request_timeout
 
         if not normalized_base_url:
             raise ConfigurationError("base_url is required")
@@ -32,7 +38,7 @@ class BaseTransport:
             raise ConfigurationError("api_key is required")
 
         self.base_url = normalized_base_url
-        self.timeout = timeout
+        self.timeout = resolved_timeout
         self._default_headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {normalized_api_key}",
@@ -183,3 +189,25 @@ class BaseTransport:
             detail=detail,
             body=body,
         )
+
+
+def _resolve_base_url(*, base_url: str | None, domain: str | None) -> str:
+    normalized = (base_url or "").strip()
+    if normalized:
+        return normalized.rstrip("/")
+
+    explicit_domain = (domain or "").strip()
+    if explicit_domain:
+        return _normalize_domain(explicit_domain)
+
+    env_domain = os.getenv("E2B_DOMAIN", "").strip()
+    if env_domain:
+        return _normalize_domain(env_domain)
+
+    return DEFAULT_BASE_URL
+
+
+def _normalize_domain(value: str) -> str:
+    if value.startswith("http://") or value.startswith("https://"):
+        return value.rstrip("/")
+    return f"https://{value}".rstrip("/")

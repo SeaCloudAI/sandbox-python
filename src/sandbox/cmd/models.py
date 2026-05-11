@@ -10,6 +10,7 @@ class CmdRequestOptions:
     signature: str = ""
     signature_expiration: int | None = None
     range: str = ""
+    request_timeout: float | None = None
     timeout: float | None = None
     headers: dict[str, str] = field(default_factory=dict)
 

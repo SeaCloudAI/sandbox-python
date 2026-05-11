@@ -20,7 +20,7 @@ Preferred public API:
 - preferred template entrypoint: `Template.build(...)`, `Template.build_in_background(...)`, `Template.list(...)`, `Template.get(...)`, `Template.delete(...)`
 - low-level transport modules: `sandbox.control`, `sandbox.build`, `sandbox.cmd`
 
-`control` and `build` talk to the gateway. Runtime access is derived from sandbox create/detail/connect responses; callers should not hardcode runtime endpoints or tokens. `project_id` is an optional gateway routing header for project-scoped deployments.
+High-level `Sandbox` / `Template` helpers read gateway config from `E2B_DOMAIN` / `E2B_API_KEY`. Low-level `sandbox.control`, `sandbox.build`, and `sandbox.cmd` clients can still be initialized explicitly when needed. Runtime access is derived from sandbox create/detail/connect responses; callers should not hardcode runtime endpoints or tokens.
 
 ## E2B Alignment
 
@@ -28,7 +28,7 @@ Preferred public API:
 - Code interpreter alignment: `sandbox.run_code(...)` is available for `python`, `javascript`, `typescript`, `bash`, `r`, and `java`. Python results support `display(...)`, last-expression capture, tables, Matplotlib PNG/chart payloads, a persistent default execution context, and stateful `create_code_context/list_code_contexts/restart_code_context/remove_code_context` helpers. Non-Python contexts use the same API surface but currently behave as stateless execution profiles.
 - Known unsupported area: snapshot APIs are not exposed because the underlying platform does not support them yet.
 - Known partial area: only Python contexts are stateful. Non-Python contexts still execute in isolated one-shot processes.
-- Runtime compatibility note: the SDK normalizes a few runtime-specific quirks so the high-level behavior stays E2B-like, such as missing-process `kill()` results, PTY reconnect output framing, and a one-time retry for transient reconnect-stream open failures.
+- Runtime normalization note: the SDK smooths a few runtime-specific quirks so the high-level behavior stays E2B-like, such as missing-process `kill()` results, PTY reconnect output framing, and a one-time retry for transient reconnect-stream open failures.
 
 ## Environment
 
@@ -52,7 +52,7 @@ Default production gateway:
 https://sandbox-gateway.cloud.seaart.ai
 ```
 
-High-level `Sandbox.create(...)` defaults to the official `base` template when you do not pass a template explicitly. For production integrations, prefer passing a concrete template ID such as `tpl-...` or a stable official template type such as `base`, `code-interpreter`, `claude`, or `codex` when your environment publishes those official templates.
+High-level `Sandbox.create(...)` omits `templateID` when you do not pass one, so Atlas can apply its server-side default of the latest official `base` template. For production integrations, prefer passing a concrete template ID such as `tpl-...` or a stable official template type such as `base`, `code-interpreter`, `claude`, or `codex` when your environment publishes those official templates.
 
 ## Production Readiness
 
@@ -70,7 +70,7 @@ High-level `Sandbox.create(...)` defaults to the official `base` template when y
 - API model: this SDK targets the unified SeaCloudAI sandbox gateway and keeps public template APIs limited to user-facing fields.
 - Stability: operator/admin routes may exist on the gateway, but they are not part of the public SDK workflow described in this README.
 - Retry model: treat create/delete/build operations as remote control-plane actions; add idempotency and retry policy in your application layer according to your workload.
-- Timeout semantics: public sandbox, command, PTY, git, and code-execution `timeout` values are in seconds. `request_timeout` is only the SDK HTTP request timeout in seconds.
+- Timeout semantics: public sandbox, command, PTY, git, and code-execution `timeout` values are in seconds. Lifecycle TTL fields exposed through Atlas control-plane APIs accept `0` when the service defines a zero-value meaning, such as connect without TTL refresh. `request_timeout` is only the SDK HTTP request timeout in seconds.
 
 ## Quick Start
 
@@ -296,7 +296,7 @@ Useful CMD helpers:
 
 ## Notes
 
-- The gateway entrypoint always needs an API key. `base_url` can come from `E2B_DOMAIN`, and project-scoped deployments can additionally set `project_id`.
+- High-level helpers always read gateway auth and endpoint from `E2B_DOMAIN` / `E2B_API_KEY`. Only low-level transport clients should be initialized with explicit `base_url` / `api_key`.
 - Runtime access should be derived from bound sandbox objects or low-level sandbox instances.
 - Low-level create/detail responses include `envdUrl` and `envdAccessToken` when nano-executor access is enabled.
 - Runtime file/process APIs require a template image that starts nano-executor and returns runtime access fields; if runtime APIs return `404`, verify the selected template supports CMD runtime routes.

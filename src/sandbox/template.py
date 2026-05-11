@@ -61,7 +61,7 @@ class Template:
         name: str,
         **options: Any,
     ) -> dict[str, Any]:
-        client = _new_client_from_gateway_options(options)
+        client = _new_high_level_client(options)
         return client.build_template(template, name, **options)
 
     @classmethod
@@ -71,12 +71,12 @@ class Template:
         name: str,
         **options: Any,
     ) -> dict[str, Any]:
-        client = _new_client_from_gateway_options(options)
+        client = _new_high_level_client(options)
         return client.build_template_in_background(template, name, **options)
 
     @classmethod
     def list(cls, **options: Any) -> list[dict[str, Any]]:
-        client = _new_client_from_gateway_options(options)
+        client = _new_high_level_client(options)
         return client.list_templates(options or None)
 
     @classmethod
@@ -87,17 +87,17 @@ class Template:
         params: Mapping[str, Any] | None = None,
         **options: Any,
     ) -> dict[str, Any]:
-        client = _new_client_from_gateway_options(options)
+        client = _new_high_level_client(options)
         return client.get_template(ref, params)
 
     @classmethod
     def delete(cls, ref: str, **options: Any) -> None:
-        client = _new_client_from_gateway_options(options)
+        client = _new_high_level_client(options)
         client.delete_template(ref)
 
     @classmethod
     def exists(cls, ref: str, **options: Any) -> bool:
-        client = _new_client_from_gateway_options(options)
+        client = _new_high_level_client(options)
         return client.template_exists(ref)
 
     @classmethod
@@ -106,7 +106,7 @@ class Template:
         data: Mapping[str, Any],
         **options: Any,
     ) -> dict[str, Any]:
-        client = _new_client_from_gateway_options(options)
+        client = _new_high_level_client(options)
         return client.get_template_build_status(data, **options)
 
     def __init__(self) -> None:
@@ -236,10 +236,10 @@ class Template:
             self.copy(
                 item["src"],
                 item["dest"],
-                files_hash=item.get("files_hash") or item.get("filesHash"),
-                force_upload=item.get("force_upload", item.get("forceUpload")),
+                files_hash=item.get("files_hash"),
+                force_upload=item.get("force_upload"),
                 mode=item.get("mode"),
-                resolve_symlinks=item.get("resolve_symlinks", item.get("resolveSymlinks")),
+                resolve_symlinks=item.get("resolve_symlinks"),
                 user=item.get("user"),
             )
         return self
@@ -561,19 +561,23 @@ def _build_with_service(
     )
 
 
-def _new_client_from_gateway_options(options: dict[str, Any]):
+def _new_high_level_client(options: dict[str, Any]):
     from ._client import GatewayClient
 
+    request_timeout = _pop_high_level_request_timeout(options)
+    if request_timeout is None:
+        return GatewayClient()
+    return GatewayClient(request_timeout=request_timeout)
+
+
+def _pop_high_level_request_timeout(options: dict[str, Any]) -> float | None:
+    for key in ("base_url", "api_key", "domain", "project_id"):
+        if options.get(key) is not None:
+            raise ValidationError(
+                f"{key} is not supported on high-level Template helpers; use E2B_DOMAIN/E2B_API_KEY env vars",
+            )
     request_timeout = options.pop("request_timeout", None)
-    client_options = {
-        "domain": options.pop("domain", None),
-        "base_url": options.pop("base_url", None),
-        "api_key": options.pop("api_key", None),
-        "project_id": options.pop("project_id", None),
-        "request_timeout": request_timeout,
-        "timeout": float(request_timeout if request_timeout is not None else options.pop("timeout", 30.0)),
-    }
-    return GatewayClient(**{key: value for key, value in client_options.items() if value is not None})
+    return None if request_timeout is None else float(request_timeout)
 
 
 def _template_exists_with_service(service: BuildService, ref: str) -> bool:
@@ -608,8 +612,8 @@ def _get_template_build_status_with_service(
 def _normalize_build_status_response(response: Mapping[str, Any]) -> dict[str, Any]:
     return {
         **response,
-        "template_id": str(response.get("templateID") or response.get("template_id") or ""),
-        "build_id": str(response.get("buildID") or response.get("build_id") or ""),
+        "template_id": str(response.get("templateID") or ""),
+        "build_id": str(response.get("buildID") or ""),
     }
 
 
@@ -621,7 +625,7 @@ def _list_templates_with_service(
         return service.list_templates(params)
     return service.list_templates(ListTemplatesParams(
             visibility=params.get("visibility"),
-            team_id=params.get("team_id") or params.get("teamID"),
+            team_id=params.get("team_id"),
             limit=params.get("limit"),
             offset=params.get("offset"),
         ))
@@ -637,7 +641,7 @@ def _get_template_with_service(
         return service.get_template(template_id, params)
     resolved_params = GetTemplateParams(
         limit=params.get("limit"),
-        next_token=params.get("next_token") or params.get("nextToken"),
+        next_token=params.get("next_token"),
     )
     return service.get_template(template_id, resolved_params)
 

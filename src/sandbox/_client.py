@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, Mapping
 
 from .build.service import BuildService
@@ -15,26 +16,32 @@ if TYPE_CHECKING:
     from .template import LogEntry, Template
 
 
-class Client(ControlService):
+class GatewayClient(ControlService):
     def __init__(
         self,
-        base_url: str,
-        api_key: str,
+        base_url: str | None = None,
+        api_key: str | None = None,
         *,
-        project_id: str = "",
+        domain: str | None = None,
+        project_id: str | None = None,
         timeout: float = 30.0,
+        request_timeout: float | None = None,
     ) -> None:
         super().__init__(
             base_url=base_url,
             api_key=api_key,
+            domain=domain,
             project_id=project_id,
             timeout=timeout,
+            request_timeout=request_timeout,
         )
         self.build = BuildService(
             base_url=base_url,
             api_key=api_key,
+            domain=domain,
             project_id=project_id,
             timeout=timeout,
+            request_timeout=request_timeout,
         )
 
     def cmd(self, *, base_url: str, access_token: str = "", timeout: float = 30.0) -> CommandService:
@@ -103,12 +110,10 @@ class Client(ControlService):
 
         if isinstance(template_or_options, str):
             body = dict(options)
-            body["templateID"] = template_or_options
+            body["template"] = template_or_options
         else:
             body = dict(template_or_options or {})
             body.update(options)
-            if "template" in body and "templateID" not in body:
-                body["templateID"] = body["template"]
         created = self.create_sandbox(_filter_create_body(body))
         return Sandbox(self, created)
 
@@ -116,22 +121,20 @@ class Client(ControlService):
         self,
         sandbox_id: str,
         *,
-        timeout: int = 300,
+        timeout: int | None = None,
     ) -> Sandbox:
         from .facade import Sandbox
 
-        response = self.connect_sandbox(sandbox_id, {"timeout": timeout})
+        response = self.connect_sandbox(sandbox_id, {"timeout": _normalize_connect_timeout(timeout=timeout)})
         return Sandbox(self, response.sandbox)
 
     def list(self, **options: Any) -> list[Sandbox]:
-        from .facade import Sandbox
-
         params = {
             key: value
             for key, value in options.items()
             if key in {"metadata", "state", "limit", "next_token"}
         }
-        return [Sandbox(self, item) for item in self.list_sandboxes(params or None)]
+        return self.list_sandboxes(params or None)
 
     def build_template(
         self,
@@ -190,9 +193,6 @@ class Client(ControlService):
 
         return _template_exists_with_service(self.build, ref)
 
-    def template_alias_exists(self, alias: str) -> bool:
-        return self.template_exists(alias)
-
     def get_template_build_status(
         self,
         data: Mapping[str, Any],
@@ -232,8 +232,32 @@ class Client(ControlService):
 
 
 def _filter_create_body(source: Mapping[str, Any]) -> dict[str, Any]:
-    return {
-        key: value
-        for key, value in source.items()
-        if key in {"templateID", "workspaceId", "timeout", "metadata", "envVars", "volumeMounts", "waitReady"}
+    template_id = source.get("template")
+    normalized_template_id = str(template_id).strip() if template_id is not None else ""
+    body = {
+        "templateID": normalized_template_id or None,
+        "timeout": _normalize_lifecycle_timeout(source),
+        "metadata": source.get("metadata"),
+        "envVars": source.get("envs"),
+        "waitReady": source.get("waitReady"),
     }
+    return {key: value for key, value in body.items() if value is not None}
+
+def _normalize_timeout_seconds(timeout: Any, *, allow_zero: bool = False) -> int | None:
+    if timeout is None:
+        return None
+    timeout_value = int(timeout)
+    if timeout_value < 0 or (timeout_value == 0 and not allow_zero):
+        message = "timeout must be a non-negative integer" if allow_zero else "timeout must be a positive integer"
+        raise ConfigurationError(message)
+    return timeout_value
+
+
+def _normalize_lifecycle_timeout(source: Mapping[str, Any]) -> int | None:
+    return _normalize_timeout_seconds(source.get("timeout"), allow_zero=True)
+
+
+def _normalize_connect_timeout(*, timeout: int | None) -> int:
+    if timeout is None:
+        return 300
+    return _normalize_timeout_seconds(timeout, allow_zero=True) or 0

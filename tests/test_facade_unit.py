@@ -56,7 +56,7 @@ class FacadeSandboxTest(unittest.TestCase):
         self.assertEqual(calls[5], ("list", {"limit": 10}))
         self.assertEqual(calls[7], ("get_sandbox", "sb-1"))
 
-    def test_gateway_client_create_defaults_to_base_template(self) -> None:
+    def test_gateway_client_create_allows_missing_template_id(self) -> None:
         class MockClient(GatewayClient):
             def __init__(self) -> None:
                 super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
@@ -70,8 +70,8 @@ class FacadeSandboxTest(unittest.TestCase):
 
         client = MockClient()
         created = client.create(waitReady=True)
-        self.assertEqual(client.body, {"templateID": "base", "waitReady": True})
-        self.assertEqual(created.raw["templateID"], "base")
+        self.assertEqual(client.body, {"waitReady": True})
+        self.assertIsNone(created.raw["templateID"])
 
     def test_bound_sandbox_uses_attached_client(self) -> None:
         class MockRuntime:
@@ -132,6 +132,39 @@ class FacadeSandboxTest(unittest.TestCase):
         self.assertEqual(mock_client.connect_calls[0], ("sb-1", {"timeout": 120}))
         self.assertEqual(len(listed), 1)
         self.assertFalse(listed[0].is_running())
+
+    def test_bound_sandbox_allows_zero_timeout_lifecycle_semantics(self) -> None:
+        class MockClient:
+            def __init__(self) -> None:
+                self.connect_calls = []
+                self.timeout_calls = []
+
+            def connect_sandbox(self, sandbox_id, body):
+                self.connect_calls.append((sandbox_id, body))
+                return type("ConnectedSandbox", (), {
+                    "sandbox": {
+                        "sandboxID": sandbox_id,
+                        "templateID": "base",
+                        "status": "running",
+                        "state": "running",
+                    },
+                })()
+
+            def set_sandbox_timeout(self, sandbox_id, body):
+                self.timeout_calls.append((sandbox_id, body))
+
+        sandbox = Sandbox(MockClient(), {
+            "sandboxID": "sb-zero",
+            "templateID": "base",
+            "status": "paused",
+            "state": "paused",
+        })
+
+        sandbox.connect(timeout=0)
+        sandbox.set_timeout(0)
+
+        self.assertEqual(sandbox._client.connect_calls, [("sb-zero", {"timeout": 0})])
+        self.assertEqual(sandbox._client.timeout_calls, [("sb-zero", {"timeout": 0})])
 
     def test_git_helpers_delegate_to_runtime_commands(self) -> None:
         class MockRuntime:
@@ -371,8 +404,8 @@ class FacadeSandboxTest(unittest.TestCase):
 
             def get_result(self, body, options=None):
                 if body["cmdId"] == "cmd-bg":
-                    return {"exitCode": 0, "stdout": "ping\n", "stderr": ""}
-                return {"exitCode": 0, "stdout": "", "stderr": ""}
+                    return {"exit_code": 0, "stdout": "ping\n", "stderr": ""}
+                return {"exit_code": 0, "stdout": "", "stderr": ""}
 
         class MockClient:
             def __init__(self) -> None:
@@ -669,7 +702,7 @@ class FacadeSandboxTest(unittest.TestCase):
 
             def get_result(self, body, options=None):
                 self.calls.append(("get_result", body))
-                return {"exitCode": 0, "stdout": "hi\n", "stderr": ""}
+                return {"exit_code": 0, "stdout": "hi\n", "stderr": ""}
 
             def remove(self, body, options=None):
                 self.calls.append(("remove", body["path"]))
@@ -991,11 +1024,11 @@ class FacadeTemplateTest(unittest.TestCase):
         client.build = MockBuildService()
         listed = client.list_templates({
             "visibility": "team",
-            "teamID": "team-1",
+            "team_id": "team-1",
             "limit": 20,
             "offset": 40,
         })
-        detail = client.get_template("tpl-direct", {"limit": 10, "nextToken": "build-1"})
+        detail = client.get_template("tpl-direct", {"limit": 10, "next_token": "build-1"})
         client.delete_template("demo")
 
         self.assertEqual(listed[0]["templateID"], "tpl-direct")
@@ -1281,10 +1314,12 @@ class FacadeTemplateTest(unittest.TestCase):
 
         original_client = client_module.GatewayClient
         client_module.GatewayClient = MockClient
+        original_template_client = template_module.GatewayClient if hasattr(template_module, "GatewayClient") else None
+        template_module.GatewayClient = MockClient
         try:
             template = Template().from_image("docker.io/library/alpine:3.20")
             self.assertEqual(
-                Template.build(template, "demo:v1", api_key="unit-auth-value", base_url="https://sandbox-gateway.cloud.seaart.ai")["template_id"],
+                Template.build(template, "demo:v1")["template_id"],
                 "tpl-1",
             )
             self.assertEqual(Template.build_in_background(template, "demo:v1")["template_id"], "tpl-bg")
@@ -1298,18 +1333,14 @@ class FacadeTemplateTest(unittest.TestCase):
             )
         finally:
             client_module.GatewayClient = original_client
+            if original_template_client is not None:
+                template_module.GatewayClient = original_template_client
 
-        self.assertEqual(calls[0], ("init", {
-            "base_url": "https://sandbox-gateway.cloud.seaart.ai",
-            "api_key": "unit-auth-value",
-            "timeout": 30.0,
-        }))
+        self.assertEqual(calls[0], ("init", {}))
         self.assertEqual(calls[1][0], "build_template")
         self.assertIn(("list_templates", {"limit": 10}), calls)
         self.assertIn(("get_template", {"ref": "tpl-1", "params": {"limit": 5}}), calls)
-        self.assertGreaterEqual(calls.count(("init", {
-            "timeout": 30.0,
-        })), 1)
+        self.assertGreaterEqual(calls.count(("init", {})), 1)
         self.assertEqual(calls[-1], ("get_template_build_status", {"data": {"template_id": "tpl-1", "build_id": "build-1"}, "options": {"limit": 10}}))
 
 

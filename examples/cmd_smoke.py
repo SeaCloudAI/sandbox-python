@@ -15,17 +15,12 @@ def _bootstrap_local_src() -> None:
 
 _bootstrap_local_src()
 
-from sandbox import Client
+from sandbox import Sandbox
 
 
 def main() -> None:
-    base_url = os.getenv("SEACLOUD_BASE_URL", "").strip()
-    if not base_url:
-        raise RuntimeError("SEACLOUD_BASE_URL is required")
-
-    api_key = os.getenv("SEACLOUD_API_KEY", "").strip()
-    if not api_key:
-        raise RuntimeError("SEACLOUD_API_KEY is required")
+    if not os.getenv("E2B_API_KEY", "").strip():
+        raise RuntimeError("E2B_API_KEY is required")
 
     template_id = os.getenv("SANDBOX_EXAMPLE_TEMPLATE_ID", "").strip()
     if not template_id:
@@ -34,8 +29,7 @@ def main() -> None:
     keep_resources = os.getenv("SANDBOX_EXAMPLE_KEEP_RESOURCES", "").strip().lower() in {"1", "true", "yes"}
     root = "/root/workspace"
 
-    client = Client(base_url=base_url, api_key=api_key)
-    created = client.create(template_id, timeout=1800, waitReady=True)
+    created = Sandbox.create(template_id, timeout=1800, waitReady=True)
 
     try:
         file_path = f"{root}/python-cmd-example.txt"
@@ -48,7 +42,7 @@ def main() -> None:
         print("directory entries:", len(listing))
 
         run = created.commands.run("sh", args=["-lc", f"cat {file_path}"])
-        print("run result:", run["exitCode"], repr(run["stdout"]))
+        print("run result:", run["exit_code"], repr(run["stdout"]))
 
     finally:
         if not keep_resources:

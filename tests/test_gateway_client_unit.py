@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import ssl
 import unittest
 from typing import Any
 from urllib.error import HTTPError, URLError
 
-from sandbox import Client, Template
+from sandbox import Template
+from sandbox._client import GatewayClient
 from sandbox.cmd import CmdRequestOptions, CommandService, DownloadRequest, UploadBytesRequest
 import sandbox.cmd.service as cmd_service_module
 from sandbox.control import SandboxLogsParams
@@ -42,7 +44,7 @@ class FakeResponse:
         return False
 
 
-class MockClient(Client):
+class MockGatewayClient(GatewayClient):
     def __init__(self, handler) -> None:
         super().__init__(
             base_url="https://sandbox-gateway.cloud.seaart.ai",
@@ -65,12 +67,12 @@ class MockCommandService(CommandService):
         return self._handler(method, path, kwargs)
 
 
-class ClientUnitTest(unittest.TestCase):
+class GatewayClientUnitTest(unittest.TestCase):
     def test_system_endpoints(self) -> None:
-        client = MockClient(lambda request: FakeResponse(200, "metric 1\n"))
+        client = MockGatewayClient(lambda request: FakeResponse(200, "metric 1\n"))
         self.assertEqual(client.metrics(), "metric 1\n")
 
-        client = MockClient(lambda request: FakeResponse(200, json.dumps({"message": "shutdown initiated"})))
+        client = MockGatewayClient(lambda request: FakeResponse(200, json.dumps({"message": "shutdown initiated"})))
         self.assertEqual(client.shutdown()["message"], "shutdown initiated")
 
     def test_sandbox_request_encoding(self) -> None:
@@ -87,7 +89,7 @@ class ClientUnitTest(unittest.TestCase):
                 }))
             self.fail("unexpected request")
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         response = client.create_sandbox({"templateID": "tpl", "waitReady": True})
         self.assertEqual(response["sandboxID"], "sb-1")
         self.assertEqual(response.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
@@ -98,9 +100,72 @@ class ClientUnitTest(unittest.TestCase):
             self.assertEqual(json.loads(request.data.decode("utf-8")), {"waitReady": False})
             return FakeResponse(201, json.dumps({"sandboxID": "sb-2"}))
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         response = client.create_sandbox({"waitReady": False})
         self.assertEqual(response["sandboxID"], "sb-2")
+
+    def test_gateway_client_falls_back_to_e2b_api_key(self) -> None:
+        previous = os.environ.get("E2B_API_KEY")
+        os.environ["E2B_API_KEY"] = "unit-auth-from-e2b"
+        try:
+            seen_headers = {}
+
+            class E2BGatewayEnvClient(GatewayClient):
+                def open(self, request):
+                    seen_headers.update({key.lower(): value for key, value in request.header_items()})
+                    return FakeResponse(200, "[]")
+
+            response = E2BGatewayEnvClient(base_url="https://sandbox-gateway.cloud.seaart.ai").list_sandboxes()
+            self.assertEqual(response, [])
+            self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-from-e2b")
+            self.assertEqual(seen_headers["x-api-key"], "unit-auth-from-e2b")
+        finally:
+            if previous is None:
+                del os.environ["E2B_API_KEY"]
+            else:
+                os.environ["E2B_API_KEY"] = previous
+
+    def test_seacloud_compatibility_env_vars_are_ignored_for_gateway_config(self) -> None:
+        previous_e2b_api_key = os.environ.get("E2B_API_KEY")
+        previous_seacloud_api_key = os.environ.get("SEACLOUD_API_KEY")
+        previous_e2b_domain = os.environ.get("E2B_DOMAIN")
+        previous_seacloud_base_url = os.environ.get("SEACLOUD_BASE_URL")
+        os.environ["E2B_API_KEY"] = "unit-auth-from-e2b"
+        os.environ["SEACLOUD_API_KEY"] = "unit-auth-from-seacloud"
+        os.environ["E2B_DOMAIN"] = "e2b.example.test"
+        os.environ["SEACLOUD_BASE_URL"] = "https://seacloud.example.test"
+        try:
+            seen_headers = {}
+            seen_urls = []
+
+            class E2BPreferredGatewayEnvClient(GatewayClient):
+                def open(self, request):
+                    seen_urls.append(request.full_url)
+                    seen_headers.update({key.lower(): value for key, value in request.header_items()})
+                    return FakeResponse(200, "[]")
+
+            response = E2BPreferredGatewayEnvClient().list_sandboxes()
+            self.assertEqual(response, [])
+            self.assertTrue(seen_urls[0].startswith("https://e2b.example.test/"))
+            self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-from-e2b")
+            self.assertEqual(seen_headers["x-api-key"], "unit-auth-from-e2b")
+        finally:
+            if previous_e2b_api_key is None:
+                del os.environ["E2B_API_KEY"]
+            else:
+                os.environ["E2B_API_KEY"] = previous_e2b_api_key
+            if previous_seacloud_api_key is None:
+                del os.environ["SEACLOUD_API_KEY"]
+            else:
+                os.environ["SEACLOUD_API_KEY"] = previous_seacloud_api_key
+            if previous_e2b_domain is None:
+                del os.environ["E2B_DOMAIN"]
+            else:
+                os.environ["E2B_DOMAIN"] = previous_e2b_domain
+            if previous_seacloud_base_url is None:
+                del os.environ["SEACLOUD_BASE_URL"]
+            else:
+                os.environ["SEACLOUD_BASE_URL"] = previous_seacloud_base_url
 
     def test_build_namespace_reuses_gateway_configuration(self) -> None:
         def handler(request):
@@ -121,12 +186,12 @@ class ClientUnitTest(unittest.TestCase):
                 }))
             self.fail("unexpected request")
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         response = client.build.create_template({"name": "demo", "cpuCount": 2, "memoryMB": 1024})
         self.assertEqual(response["templateID"], "tpl-1")
 
     def test_api_error_accepts_string_detail(self) -> None:
-        client = MockClient(lambda request: FakeResponse(404, json.dumps({"error": "not found"}), reason="Not Found"))
+        client = MockGatewayClient(lambda request: FakeResponse(404, json.dumps({"error": "not found"}), reason="Not Found"))
 
         with self.assertRaises(NotFoundError) as raised:
             client.get_sandbox("sb-1")
@@ -141,7 +206,7 @@ class ClientUnitTest(unittest.TestCase):
             seen.append(request.full_url)
             return FakeResponse(200, json.dumps([] if "/sandboxes?" in request.full_url else {"logs": []}))
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         client.list_sandboxes(
             params=type("P", (), {
                 "metadata": {"app": "prod", "team": "core"},
@@ -180,7 +245,7 @@ class ClientUnitTest(unittest.TestCase):
                 "envdAccessToken": "unit-runtime-auth",
             }))
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         listed = client.list_sandboxes()
         self.assertEqual(listed[0]["sandboxID"], "sb-1")
         detail = listed[0].reload()
@@ -216,7 +281,7 @@ class ClientUnitTest(unittest.TestCase):
                 "logs": [],
             }))
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         self.assertEqual(client.get_sandbox("sb-1")["sandboxID"], "sb-1")
         self.assertTrue(client.send_heartbeat("sb-1", {"status": "healthy"})["received"])
         client.set_sandbox_timeout("sb-1", {"timeout": 1200})
@@ -269,7 +334,7 @@ class ClientUnitTest(unittest.TestCase):
                 }))
             self.fail("unexpected request")
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         self.assertEqual(client.get_pool_status()["request_id"], "req-pool")
         self.assertEqual(client.start_rolling_update({"templateId": "tpl-1"})["request_id"], "req-start")
         self.assertEqual(client.get_rolling_update_status()["request_id"], "req-status")
@@ -297,7 +362,7 @@ class ClientUnitTest(unittest.TestCase):
                 "envdAccessToken": "unit-runtime-auth",
             }))
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         sandbox = client.create_sandbox({"templateID": "tpl"})
         detail = sandbox.reload()
         sandbox.logs()
@@ -326,7 +391,7 @@ class ClientUnitTest(unittest.TestCase):
                 "status": "running",
             }))
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         sandbox = client.create("tpl", waitReady=True)
         info = sandbox.get_info()
 
@@ -364,16 +429,16 @@ class ClientUnitTest(unittest.TestCase):
                 "public": False,
             }))
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         built = client.build_template(Template().from_base_image().run_cmd("echo hello"), "demo:v1", cpu_count=2)
 
-        self.assertEqual(built["templateID"], "tpl-1")
+        self.assertEqual(built["template_id"], "tpl-1")
         self.assertEqual(calls[0][1], "https://sandbox-gateway.cloud.seaart.ai/api/v1/templates")
         self.assertEqual(calls[0][2], {"name": "demo", "tags": ["v1"], "cpuCount": 2})
         self.assertEqual(calls[0][3], "project-1")
 
     def test_validations(self) -> None:
-        client = MockClient(lambda request: FakeResponse(200, "{}"))
+        client = MockGatewayClient(lambda request: FakeResponse(200, "{}"))
 
         with self.assertRaises(ValidationError):
             client.get_sandbox_logs("sb", SandboxLogsParams(limit=1001))
@@ -404,7 +469,7 @@ class ClientUnitTest(unittest.TestCase):
                 return FakeResponse(200, json.dumps({"logs": []}))
             return FakeResponse(204, "")
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         client.get_sandbox_logs("sb", SandboxLogsParams(cursor=0, limit=1000, direction="backward", search="x" * 256))
         client.connect_sandbox("sb", {"timeout": 0})
         client.set_sandbox_timeout("sb", {"timeout": 86400})
@@ -415,7 +480,7 @@ class ClientUnitTest(unittest.TestCase):
         self.assertEqual(len(calls), 6)
 
     def test_empty_sandbox_ids_are_rejected(self) -> None:
-        client = MockClient(lambda request: FakeResponse(200, "{}"))
+        client = MockGatewayClient(lambda request: FakeResponse(200, "{}"))
 
         with self.assertRaises(ValidationError):
             client.get_sandbox(" ")
@@ -440,7 +505,7 @@ class ClientUnitTest(unittest.TestCase):
                 fp=FakeResponse(404, json.dumps({"code": 404, "message": "Not found"}), reason="Not Found"),
             )
 
-        client = MockClient(handler)
+        client = MockGatewayClient(handler)
         with self.assertRaises(NotFoundError) as ctx:
             client.get_sandbox("sb-1")
         self.assertEqual(ctx.exception.kind, "not_found")
@@ -602,7 +667,7 @@ class ClientUnitTest(unittest.TestCase):
             cmd.get_result({"cmdId": " "})
 
     def test_runtime_from_sandbox_uses_envd_fields(self) -> None:
-        client = MockClient(lambda request: FakeResponse(200, "{}"))
+        client = MockGatewayClient(lambda request: FakeResponse(200, "{}"))
         runtime = client.runtime_from_sandbox({
             "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
             "envdAccessToken": "unit-runtime-auth",
@@ -611,7 +676,7 @@ class ClientUnitTest(unittest.TestCase):
         self.assertEqual(runtime.access_token, "unit-runtime-auth")
 
     def test_transport_timeout_raises_typed_error(self) -> None:
-        client = MockClient(lambda request: (_ for _ in ()).throw(TimeoutError("timed out")))
+        client = MockGatewayClient(lambda request: (_ for _ in ()).throw(TimeoutError("timed out")))
         with self.assertRaises(RequestTimeoutError):
             client.metrics()
 

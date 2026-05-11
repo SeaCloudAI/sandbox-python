@@ -574,8 +574,10 @@ class CommandService:
         return any(marker in message for marker in _RETRYABLE_STREAM_ERROR_MARKERS)
 
     def _timeout_from_options(self, options: CmdRequestOptions | None) -> float | None:
-        if options is None or options.timeout is None:
+        if options is None:
             return None
+        if options.request_timeout is not None:
+            return options.request_timeout
         return options.timeout
 
     def _validate_selector(self, selector: Mapping[str, Any]) -> None:

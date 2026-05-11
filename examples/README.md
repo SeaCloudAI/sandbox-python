@@ -4,8 +4,8 @@ Run examples from the package root.
 
 Shared env:
 
-- `SEACLOUD_BASE_URL`
-- `SEACLOUD_API_KEY`
+- `E2B_DOMAIN`
+- `E2B_API_KEY`
 
 Before running any example, export these variables once in your shell. Use the gateway entrypoint documented in the root `README.md`.
 
@@ -14,18 +14,42 @@ Examples focus on the stable lifecycle, template, command, and PTY flows. Watche
 
 Recommended reading order:
 
-1. `full_workflow.py`: create a template -> trigger an E2B-style build -> wait for build -> start sandbox -> connect runtime -> run -> logs/metrics -> cleanup
-2. `template_features.py`: `from_dockerfile` -> local `copy(..., mode=..., resolve_symlinks=...)` -> `client.build_template_in_background()` -> `client.get_template_build_status()` -> existence/detail
-3. `control_sandbox.py`: root client -> create sandbox -> bound sandbox helpers -> cleanup
-4. `cmd_smoke.py`: create a sandbox through the gateway, then write/read/list/run through runtime
-5. `build_template.py`: minimal `Template()` plus `client.build_template()`
+1. `code_interpreter.py`: default Python context -> explicit Python context -> non-Python stateless `context`
+2. `full_workflow.py`: pure high-level facade flow -> create a template -> trigger an E2B-style build -> wait for build -> start sandbox -> connect runtime -> run -> logs/metrics -> cleanup
+3. `template_features.py`: `from_dockerfile` -> local `copy(..., mode=..., resolve_symlinks=..., user=...)` -> `Template.build_in_background()` -> `Template.get_build_status()` -> existence/detail
+4. `control_sandbox.py`: `Sandbox.create()` -> bound sandbox helpers -> cleanup
+5. `cmd_smoke.py`: create a sandbox through the gateway, then write/read/list/run through runtime
+6. `build_template.py`: minimal `Template.build(...)`
+
+## Code Interpreter
+
+This example focuses on the E2B-style code interpreter facade:
+
+- repeated `sandbox.run_code(...)` calls sharing the default Python context
+- explicit stateful Python contexts with `create_code_context(...)`
+- non-Python contexts acting as reusable execution profiles for `language`, `cwd`, and `timeout`
+- requires a template that actually bundles the code-interpreter environment; `base` is not enough
+
+Required env:
+
+- `SANDBOX_EXAMPLE_TEMPLATE_ID`
+
+Optional env:
+
+- `SANDBOX_EXAMPLE_KEEP_RESOURCES=1`
+
+```bash
+python examples/code_interpreter.py
+```
+
+For SeaCloudAI environments, prefer an official `code-interpreter` template or a concrete `tpl-code-interpreter-...` template ID for this example.
 
 ## Full Workflow
 
 This is the primary example when evaluating the SDK end to end:
 
 - create a template
-- trigger a build from a runtime-enabled base image plus E2B-style steps
+- trigger a build from a runtime-enabled image plus E2B-style steps
 - wait for the build to finish
 - inspect build status, build logs, and template detail
 - start a sandbox from that template
@@ -40,7 +64,7 @@ Optional env:
 
 - `SANDBOX_EXAMPLE_KEEP_RESOURCES=1`
 
-The base image must already be runtime-enabled for CMD APIs. The example build starts from that image and adds app-specific content under `/workspace` through a `RUN` step.
+The source image must already be runtime-enabled for CMD APIs. The example build starts from that image and adds app-specific content under `/workspace` through a `RUN` step.
 
 ```bash
 python examples/full_workflow.py
@@ -50,8 +74,7 @@ python examples/full_workflow.py
 
 This example shows the preferred workflow:
 
-- initialize the root `Client`
-- create a sandbox from the root client
+- call `Sandbox.create(...)` directly
 - keep operating through the returned bound sandbox object
 - reload once to show the bound-object workflow
 - cleanup through the same object
@@ -70,8 +93,8 @@ python examples/control_sandbox.py
 
 ## Build Plane
 
-Recommended path: the example uses `Template()` plus `client.build_template()`.
-The flow shows the current client-first template workflow directly: template DSL -> build polling -> template detail -> cleanup.
+Recommended path: the example uses `Template.build(...)`.
+The flow shows the env-first high-level template workflow directly: template DSL -> build polling -> template detail -> cleanup.
 
 Required env: none
 
@@ -91,10 +114,9 @@ This example covers the supported template helpers that are not obvious from the
 - parse a Dockerfile from disk with `from_dockerfile`
 - inspect the generated request with `Template.to_json(...)` and `Template.to_dockerfile(...)`
 - add extra steps with `skip_cache()` and `run_cmd(..., user=...)`
-- upload a local symlink target with `copy(..., mode=..., resolve_symlinks=...)`
-- initialize the root `Client`
-- trigger `client.build_template_in_background(...)` and poll with `client.get_template_build_status(...)`
-- verify template existence and inspect template detail
+- upload a local symlink target with `copy(..., mode=..., resolve_symlinks=..., user=...)`
+- trigger `Template.build_in_background(...)` and poll with `Template.get_build_status(...)`
+- verify template existence with `Template.exists(...)` and inspect template detail with `Template.get(...)`
 
 Required env: none
 
@@ -109,7 +131,7 @@ python examples/template_features.py
 
 ## CMD Plane
 
-Recommended path: the example uses the root `Client`, creates a sandbox through the gateway, then derives runtime access from the returned sandbox object.
+Recommended path: the example uses `Sandbox.create(...)` and then stays on the returned bound sandbox object.
 The selected template must include nano-executor runtime support; otherwise file/process/RPC calls can return `404`.
 The flow stays minimal: write file -> read file -> list directory -> run command.
 The example writes under `/root/workspace`, which is the writable sandbox workspace in the current SeaCloud runtime.
@@ -126,4 +148,4 @@ Optional env:
 python examples/cmd_smoke.py
 ```
 
-For SeaCloudAI production smoke tests, `tpl-base-dc11799b9f9f4f9e` is a known-good template to use when creating the runtime-enabled sandbox.
+For SeaCloudAI production smoke tests, `tpl-base-dc11799b9f9f4f9e` is a known-good template for CMD/runtime examples such as this one. Use a `code-interpreter` template instead when you want to run `sandbox.run_code(...)`.

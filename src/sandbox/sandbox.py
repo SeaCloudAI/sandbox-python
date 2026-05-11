@@ -6,7 +6,7 @@ from .core.exceptions import ConfigurationError
 from .runtime import Runtime
 
 if TYPE_CHECKING:
-    from .client import Client
+    from ._client import GatewayClient
     from .control import SandboxLogsParams
     from .control.models import ConnectSandboxResponse
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class SandboxInstance(dict[str, Any]):
     """A bound sandbox object with attached control-plane and runtime helpers."""
 
-    def __init__(self, client: Client, data: dict[str, Any]) -> None:
+    def __init__(self, client: GatewayClient, data: dict[str, Any]) -> None:
         super().__init__(data)
         self._client = client
         self._runtime: Runtime | None = None

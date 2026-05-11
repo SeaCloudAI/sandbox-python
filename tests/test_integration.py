@@ -5,7 +5,7 @@ import time
 import unittest
 import base64
 
-from sandbox import Client
+from sandbox._client import GatewayClient
 from sandbox.cmd import DownloadRequest, FileRequest, FilesContentRequest, UploadBytesRequest
 from sandbox.control import SandboxLogsParams
 from sandbox.core import APIError
@@ -26,7 +26,7 @@ class ControlPlaneIntegrationTest(unittest.TestCase):
         if not base_url or not api_key:
             raise unittest.SkipTest("integration test env is incomplete")
 
-        cls.client = Client(base_url=base_url, api_key=api_key)
+        cls.client = GatewayClient(base_url=base_url, api_key=api_key)
         cls.template_id = template_id
 
     def test_list_sandboxes(self) -> None:
@@ -55,10 +55,8 @@ class ControlPlaneIntegrationTest(unittest.TestCase):
         if not self.template_id:
             self.skipTest("SANDBOX_TEST_TEMPLATE_ID is not set")
 
-        workspace_id = f"python-sdk-test-{time.time_ns()}"
         created = self.client.create_sandbox({
             "templateID": self.template_id,
-            "workspaceId": workspace_id,
             "timeout": 1800,
             "waitReady": True,
         })
@@ -107,7 +105,7 @@ class CmdIntegrationTest(unittest.TestCase):
         if not base_url or not api_key:
             raise unittest.SkipTest("integration test env is incomplete")
 
-        cls.client = Client(base_url=base_url, api_key=api_key)
+        cls.client = GatewayClient(base_url=base_url, api_key=api_key)
         cls.template_id = template_id
 
     def test_cmd_smoke(self) -> None:
@@ -115,10 +113,8 @@ class CmdIntegrationTest(unittest.TestCase):
             self.skipTest("SANDBOX_TEST_TEMPLATE_ID is not set")
         workspace_root = os.getenv("SANDBOX_TEST_SANDBOX_ROOT", "/root/workspace")
 
-        workspace_id = f"python-cmd-sdk-test-{time.time_ns()}"
         created = self.client.create_sandbox({
             "templateID": self.template_id,
-            "workspaceId": workspace_id,
             "timeout": 1800,
             "waitReady": True,
         })
@@ -229,7 +225,7 @@ class CmdIntegrationTest(unittest.TestCase):
                 self.assertTrue(saw_output)
                 self.assertTrue(saw_end)
                 result = cmd.get_result({"cmdId": cmd_id})
-                self.assertEqual(result["exitCode"], 0)
+                self.assertEqual(result["exit_code"], 0)
                 self.assertIn("ping", result["stdout"])
             finally:
                 stream.close()
@@ -245,17 +241,15 @@ class CmdIntegrationTest(unittest.TestCase):
             self.skipTest("SANDBOX_TEST_TEMPLATE_ID is not set")
         workspace_root = os.getenv("SANDBOX_TEST_SANDBOX_ROOT", "/root/workspace")
 
-        workspace_id = f"python-facade-sdk-test-{time.time_ns()}"
         sandbox = self.client.create(
             self.template_id,
-            workspaceId=workspace_id,
             timeout=1800,
             waitReady=True,
         )
 
         try:
             result = sandbox.commands.run("sh", args=["-lc", "echo facade-python"])
-            self.assertEqual(result["exitCode"], 0)
+            self.assertEqual(result["exit_code"], 0)
             self.assertIn("facade-python", result["stdout"])
 
             file_path = workspace_root.rstrip("/") + "/python-facade-sdk.txt"

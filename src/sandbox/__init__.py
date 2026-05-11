@@ -1,4 +1,11 @@
-from .client import Client
+from .code_interpreter import (
+    CodeContext,
+    CodeExecution,
+    CodeExecutionError,
+    CodeExecutionLogs,
+    CodeExecutionResult,
+    CodeOutputChunk,
+)
 from .facade import Sandbox
 from .runtime import Runtime
 from .sandbox import SandboxInstance
@@ -17,7 +24,12 @@ from .template import (
 )
 
 __all__ = [
-    "Client",
+    "CodeContext",
+    "CodeExecution",
+    "CodeExecutionError",
+    "CodeExecutionLogs",
+    "CodeExecutionResult",
+    "CodeOutputChunk",
     "LogEntry",
     "LogEntryEnd",
     "LogEntryStart",

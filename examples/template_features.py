@@ -18,15 +18,13 @@ def _bootstrap_local_src() -> None:
 
 _bootstrap_local_src()
 
-from sandbox import Client, Template
+from sandbox import Template
 
 TERMINAL_BUILD_STATUSES = {"ready", "failed", "error", "cancelled"}
 
 
 def main() -> None:
-    base_url = must_env("SEACLOUD_BASE_URL")
-    api_key = must_env("SEACLOUD_API_KEY")
-    client = Client(base_url=base_url, api_key=api_key)
+    must_env("E2B_API_KEY")
     image = os.getenv("SANDBOX_EXAMPLE_BUILD_IMAGE", "").strip() or "docker.io/library/alpine:3.20"
     keep_resources = env_enabled("SANDBOX_EXAMPLE_KEEP_RESOURCES")
 
@@ -52,6 +50,7 @@ def main() -> None:
                     "/workspace/copied-link.txt",
                     mode=0o600,
                     resolve_symlinks=True,
+                    user="root",
                 )
             )
 
@@ -59,26 +58,25 @@ def main() -> None:
             print("template request:", request.get("fromImage"), len(request.get("steps", [])), request.get("startCmd", ""))
             print("dockerfile preview:", dockerfile_preview(Template.to_dockerfile(template)))
 
-            built = client.build_template_in_background(
+            built = Template.build_in_background(
                 template,
                 template_name,
             )
-            template_id = str(built["templateID"])
-            print("build started:", built["templateID"], built["buildID"], built["status"])
+            template_id = str(built["template_id"])
+            print("build started:", built["template_id"], built["build_id"])
 
             build_status = wait_for_build(
-                client,
                 template_id,
-                str(built["buildID"]),
+                str(built["build_id"]),
             )
             print("build finished:", build_status.get("status"), latest_build_log(build_status))
             if build_status.get("status") != "ready":
                 raise RuntimeError(f"template build did not succeed: {build_status.get('status')}")
 
-            exists = client.template_exists(template_id)
+            exists = Template.exists(template_id)
             print("template exists:", exists)
 
-            detail = client.get_template(template_id)
+            detail = Template.get(template_id)
             print(
                 "template detail:",
                 detail.get("templateID"),
@@ -91,7 +89,7 @@ def main() -> None:
     finally:
         if not keep_resources and template_id:
             try:
-                client.delete_template(template_id)
+                Template.delete(template_id)
                 print("deleted template:", template_id)
             except Exception as error:
                 print("delete template warning:", error)
@@ -117,11 +115,11 @@ def prepare_dockerfile_fixture(root: Path, image: str) -> Path:
     return dockerfile
 
 
-def wait_for_build(client: Client, template_id: str, build_id: str) -> dict:
+def wait_for_build(template_id: str, build_id: str) -> dict:
     logs_offset = 0
     while True:
-        status = client.get_template_build_status(
-            {"templateID": template_id, "buildID": build_id},
+        status = Template.get_build_status(
+            {"template_id": template_id, "build_id": build_id},
             logs_offset=logs_offset,
             limit=100,
         )

@@ -5,8 +5,17 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 from urllib.parse import urljoin, urlparse
 
-from .client import Client
+from ._client import GatewayClient
 from .cmd import CmdRequestOptions, FileRequest, UploadBytesRequest
+from .code_interpreter import (
+    CodeContext,
+    CodeExecution,
+    PythonCodeContextManager,
+    _get_result_with_retry,
+    _normalize_language,
+    is_python_language,
+    run_code_with_runtime,
+)
 from .core.exceptions import APIError, ConfigurationError, NotFoundError
 
 
@@ -57,12 +66,12 @@ class CommandHandle:
                 break
         if not self.cmd_id:
             return {"stdout": stdout, "stderr": stderr, "pty": pty}
-        result = self.runtime.get_result({"cmdId": self.cmd_id})
+        result = _get_result_with_retry(self.runtime, self.cmd_id)
         return {
             "stdout": result["stdout"],
             "stderr": result["stderr"],
             "pty": pty,
-            "exitCode": result.get("exitCode", result.get("exit_code")),
+            "exit_code": result["exit_code"],
         }
 
 
@@ -72,36 +81,42 @@ class Commands:
 
     def run(self, cmd: str, *, background: bool = False, **options: Any) -> dict[str, Any] | CommandHandle:
         runtime = self._runtime_factory()
+        execution_cmd, execution_args = _build_command_execution(
+            cmd,
+            options.get("args"),
+            options.get("user"),
+        )
+        request_options = _runtime_request_options(options.get("request_timeout"))
         if background:
-            stream = runtime.start({
+            start_body = {
                 "process": _build_process_config(
-                    cmd,
-                    args=options.get("args"),
+                    execution_cmd,
+                    args=execution_args,
                     envs=options.get("envs"),
                     cwd=options.get("cwd"),
                 ),
                 "timeout": options.get("timeout"),
                 "stdin": True,
-            })
+            }
+            stream = runtime.start(start_body) if request_options is None else runtime.start(start_body, request_options)
             started = _expect_start_frame(stream)
             handle = CommandHandle(runtime=runtime, stream=stream, pid=started["pid"], cmd_id=started.get("cmdId"))
             if options.get("stdin"):
                 handle.send_stdin(options["stdin"])
             return handle
-        result = runtime.run({
-            "cmd": cmd,
-            "args": options.get("args"),
+        run_body = {
+            "cmd": execution_cmd,
+            "args": execution_args,
             "cwd": options.get("cwd"),
             "env": options.get("envs"),
             "timeout": options.get("timeout"),
             "stdin": options.get("stdin"),
-        })
+        }
+        result = runtime.run(run_body) if request_options is None else runtime.run(run_body, request_options)
         return {
             "stdout": result["stdout"],
             "stderr": result["stderr"],
-            "exitCode": result["exit_code"],
             "exit_code": result["exit_code"],
-            "durationMs": result["duration_ms"],
             "duration_ms": result["duration_ms"],
             "error": result.get("error"),
         }
@@ -206,17 +221,24 @@ class Pty:
 
     def create(self, command: str, **options: Any) -> CommandHandle:
         runtime = self._runtime_factory()
-        stream = runtime.start({
+        execution_cmd, execution_args = _build_command_execution(
+            command,
+            options.get("args"),
+            options.get("user"),
+        )
+        start_body = {
             "process": _build_process_config(
-                command,
-                args=options.get("args"),
+                execution_cmd,
+                args=execution_args,
                 envs=options.get("envs"),
                 cwd=options.get("cwd"),
             ),
             "timeout": options.get("timeout"),
             "stdin": True,
             "pty": {"size": options.get("size") or {"cols": 80, "rows": 24}},
-        })
+        }
+        request_options = _runtime_request_options(options.get("request_timeout"))
+        stream = runtime.start(start_body) if request_options is None else runtime.start(start_body, request_options)
         started = _expect_start_frame(stream)
         return CommandHandle(runtime=runtime, stream=stream, pid=started["pid"], cmd_id=started.get("cmdId"), pty=True)
 
@@ -324,9 +346,25 @@ class Git:
 
 
 class Sandbox:
-    def __init__(self, client: Client, data: Mapping[str, Any]) -> None:
+    @classmethod
+    def create(
+        cls,
+        template_or_options: str | Mapping[str, Any] | None = None,
+        **options: Any,
+    ) -> "Sandbox":
+        _reject_high_level_gateway_options(options)
+        return GatewayClient().create(template_or_options, **options)
+
+    @classmethod
+    def list(cls, **options: Any) -> list[dict[str, Any]]:
+        _reject_high_level_gateway_options(options)
+        return GatewayClient().list(**options)
+
+    def __init__(self, client: GatewayClient, data: Mapping[str, Any]) -> None:
         self._client = client
         self._data = dict(data)
+        self._code_contexts: PythonCodeContextManager | None = None
+        self._stateless_code_contexts: dict[str, CodeContext] = {}
         self.commands = Commands(self._runtime)
         self.files = Filesystem(self._runtime)
         self.git = Git(self.commands)
@@ -337,17 +375,9 @@ class Sandbox:
         return str(self._data["sandboxID"])
 
     @property
-    def sandboxID(self) -> str:
-        return self.sandbox_id
-
-    @property
     def sandbox_domain(self) -> str:
         raw = str(self._data.get("envdUrl") or "").strip()
         return urlparse(raw).netloc if raw else ""
-
-    @property
-    def sandboxDomain(self) -> str:
-        return self.sandbox_domain
 
     @property
     def traffic_access_token(self) -> str | None:
@@ -362,21 +392,143 @@ class Sandbox:
         self._data = dict(self._client.get_sandbox(self.sandbox_id))
         return self
 
-    def connect(self, *, timeout: int = 300) -> "Sandbox":
-        response = self._client.connect_sandbox(self.sandbox_id, {"timeout": timeout})
-        self._data = dict(response.sandbox)
-        return self
+    def connect(
+        self,
+        sandbox_id: str | None = None,
+        *,
+        timeout: int | None = None,
+    ) -> "Sandbox":
+        if isinstance(self, Sandbox):
+            response = self._client.connect_sandbox(
+                self.sandbox_id,
+                {"timeout": _normalize_connect_timeout(timeout=timeout)},
+            )
+            self._data = dict(response.sandbox)
+            return self
+        target_sandbox_id = str(self if sandbox_id is None else sandbox_id)
+        kwargs: dict[str, Any] = {}
+        if timeout is not None:
+            kwargs["timeout"] = timeout
+        _reject_high_level_gateway_options(kwargs)
+        return GatewayClient().connect(target_sandbox_id, **kwargs)
 
-    def resume(self, *, timeout: int = 300) -> "Sandbox":
+    def resume(self, *, timeout: int | None = None) -> "Sandbox":
         return self.connect(timeout=timeout)
 
-    def get_info(self) -> dict[str, Any]:
-        detail = self._client.get_sandbox(self.sandbox_id)
-        self._data = dict(detail)
-        return dict(detail)
+    def get_info(self, sandbox_id: str | None = None) -> dict[str, Any]:
+        if isinstance(self, Sandbox):
+            detail = self._client.get_sandbox(self.sandbox_id)
+            self._data = dict(detail)
+            return dict(detail)
+        target_sandbox_id = str(self if sandbox_id is None else sandbox_id)
+        _reject_high_level_gateway_options({})
+        return dict(GatewayClient().get_sandbox(target_sandbox_id))
 
     def get_metrics(self) -> dict[str, Any]:
         return self._runtime().metrics()
+
+    def run_code(
+        self,
+        code: str,
+        *,
+        language: str | None = None,
+        cwd: str | None = None,
+        timeout: int | None = None,
+        envs: Mapping[str, str] | None = None,
+        context: CodeContext | None = None,
+        on_stdout=None,
+        on_stderr=None,
+        on_result=None,
+        on_results=None,
+        on_error=None,
+    ) -> CodeExecution:
+        options = {
+            "language": language,
+            "cwd": cwd,
+            "timeout": timeout,
+            "envs": envs,
+            "context": context,
+            "on_stdout": on_stdout,
+            "on_stderr": on_stderr,
+            "on_result": on_result,
+            "on_results": on_results,
+            "on_error": on_error,
+        }
+        if context is not None:
+            if not is_python_language(context.language):
+                return run_code_with_runtime(
+                    self._runtime(),
+                    code,
+                    language=language or context.language,
+                    cwd=cwd or context.cwd,
+                    timeout=timeout or context.timeout,
+                    envs=envs,
+                    on_stdout=on_stdout,
+                    on_stderr=on_stderr,
+                    on_result=on_result,
+                    on_results=on_results,
+                    on_error=on_error,
+                )
+            return self._code_context_manager().run_in_context(context, code, options=options)
+        if is_python_language(language):
+            return self._code_context_manager().run_default(code, options=options)
+        return run_code_with_runtime(
+            self._runtime(),
+            code,
+            language=language,
+            cwd=cwd,
+            timeout=timeout,
+            envs=envs,
+            on_stdout=on_stdout,
+            on_stderr=on_stderr,
+            on_result=on_result,
+            on_results=on_results,
+            on_error=on_error,
+        )
+
+    def create_code_context(
+        self,
+        *,
+        cwd: str | None = None,
+        language: str | None = None,
+        timeout: int | None = None,
+    ) -> CodeContext:
+        if not is_python_language(language):
+            context = CodeContext(
+                cwd=cwd,
+                language=_normalize_language(language),
+                timeout=timeout,
+            )
+            self._stateless_code_contexts[context.context_id] = context
+            return context
+        return self._code_context_manager().create_context(
+            cwd=cwd,
+            language=language,
+            timeout=timeout,
+        )
+
+    def list_code_contexts(self) -> list[CodeContext]:
+        contexts = list(self._stateless_code_contexts.values())
+        if self._code_contexts is not None:
+            contexts.extend(self._code_contexts.list_contexts())
+        return contexts
+
+    def restart_code_context(self, context_or_id: str | CodeContext) -> CodeContext:
+        context_id = context_or_id if isinstance(context_or_id, str) else context_or_id.context_id
+        stateless = self._stateless_code_contexts.get(context_id)
+        if stateless is not None:
+            return stateless
+        if self._code_contexts is None:
+            raise NotFoundError(f"code context not found: {context_id}", status_code=404)
+        return self._code_context_manager().restart_context(context_or_id)
+
+    def remove_code_context(self, context_or_id: str | CodeContext) -> None:
+        context_id = context_or_id if isinstance(context_or_id, str) else context_or_id.context_id
+        if self._stateless_code_contexts.pop(context_id, None) is not None:
+            return
+        if self._code_contexts is None:
+            raise NotFoundError(f"code context not found: {context_id}", status_code=404)
+        self._code_context_manager().remove_context(context_or_id)
 
     def get_host(self, port: int) -> str:
         if port <= 0:
@@ -393,8 +545,21 @@ class Sandbox:
     def pause(self) -> None:
         self._client.pause_sandbox(self.sandbox_id)
 
-    def kill(self) -> None:
-        self._client.delete_sandbox(self.sandbox_id)
+    def kill(self, sandbox_id: str | None = None) -> bool:
+        try:
+            if isinstance(self, Sandbox):
+                self._stateless_code_contexts.clear()
+                if self._code_contexts is not None:
+                    self._code_contexts.close_all()
+                    self._code_contexts = None
+                self._client.delete_sandbox(self.sandbox_id)
+                return True
+            target_sandbox_id = str(self if sandbox_id is None else sandbox_id)
+            _reject_high_level_gateway_options({})
+            GatewayClient().delete_sandbox(target_sandbox_id)
+            return True
+        except NotFoundError:
+            return False
 
     def delete(self) -> None:
         self.kill()
@@ -402,9 +567,18 @@ class Sandbox:
     def refresh(self, body: Mapping[str, Any] | None = None) -> None:
         self._client.refresh_sandbox(self.sandbox_id, body)
 
-    def set_timeout(self, timeout_or_body: int | Mapping[str, Any]) -> None:
-        body = {"timeout": timeout_or_body} if isinstance(timeout_or_body, int) else dict(timeout_or_body)
-        self._client.set_sandbox_timeout(self.sandbox_id, body)
+    def set_timeout(
+        self,
+        timeout_or_sandbox_id: int | str,
+        maybe_timeout: int | None = None,
+    ) -> None:
+        if isinstance(self, Sandbox):
+            self._client.set_sandbox_timeout(self.sandbox_id, {"timeout": int(timeout_or_sandbox_id)})
+            return
+        target_sandbox_id = str(self)
+        resolved_timeout = int(timeout_or_sandbox_id if maybe_timeout is None else maybe_timeout)
+        _reject_high_level_gateway_options({})
+        GatewayClient().set_sandbox_timeout(target_sandbox_id, {"timeout": resolved_timeout})
 
     def is_running(self) -> bool:
         value = str(self._data.get("state") or self._data.get("status") or "").lower()
@@ -415,6 +589,11 @@ class Sandbox:
         if not envd_url:
             raise ConfigurationError("envdUrl is required")
         return self._client.runtime_from_sandbox(self._data)
+
+    def _code_context_manager(self) -> PythonCodeContextManager:
+        if self._code_contexts is None:
+            self._code_contexts = PythonCodeContextManager(self._runtime())
+        return self._code_contexts
 
 
 def _expect_start_frame(stream) -> dict[str, Any]:
@@ -438,6 +617,25 @@ def _build_git_execution(subcommand: str, args: list[str], user: str | None) -> 
             f"su -s /bin/sh {_shell_quote(user)} -c {_shell_quote(_shell_join(['git', *git_args]))}",
         ],
     )
+
+
+def _build_command_execution(command: str, args: Any, user: str | None) -> tuple[str, list[str]]:
+    command_args = list(args or [])
+    if not user:
+        return command, command_args
+    return (
+        "sh",
+        [
+            "-lc",
+            f"su -s /bin/sh {_shell_quote(user)} -c {_shell_quote(_shell_join([command, *command_args]))}",
+        ],
+    )
+ 
+
+def _runtime_request_options(request_timeout: Any) -> CmdRequestOptions | None:
+    if request_timeout is None:
+        return None
+    return CmdRequestOptions(request_timeout=float(request_timeout))
 
 
 def _build_process_config(
@@ -468,7 +666,6 @@ def _shell_quote(value: str) -> str:
 def _normalize_write_info(path: str, bytes_written: int) -> dict[str, Any]:
     return {
         "path": path,
-        "bytesWritten": bytes_written,
         "bytes_written": bytes_written,
     }
 
@@ -494,3 +691,19 @@ def _is_missing_process_error(error: Exception) -> bool:
         return False
     message = " ".join(str(part) for part in (error, error.detail, error.body) if part).lower()
     return "no such process" in message or "esrch" in message
+
+
+def _normalize_connect_timeout(*, timeout: int | None) -> int:
+    if timeout is None:
+        return 300
+    if timeout < 0:
+        raise ConfigurationError("timeout must be a non-negative integer")
+    return int(timeout)
+
+
+def _reject_high_level_gateway_options(options: Mapping[str, Any]) -> None:
+    for key in ("base_url", "api_key", "domain", "project_id"):
+        if options.get(key) is not None:
+            raise ConfigurationError(
+                f"{key} is not supported on high-level Sandbox helpers; use E2B_DOMAIN/E2B_API_KEY env vars",
+            )
