@@ -24,7 +24,7 @@ TERMINAL_BUILD_STATUSES = {"ready", "failed", "error", "cancelled"}
 
 
 def main() -> None:
-    must_env("E2B_API_KEY")
+    must_env("SEACLOUD_API_KEY")
     image = os.getenv("SANDBOX_EXAMPLE_BUILD_IMAGE", "").strip() or "docker.io/library/alpine:3.20"
     keep_resources = env_enabled("SANDBOX_EXAMPLE_KEEP_RESOURCES")
 

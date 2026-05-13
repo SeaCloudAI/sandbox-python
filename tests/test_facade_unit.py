@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import json
+import threading
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import ANY
@@ -33,7 +35,7 @@ class FacadeSandboxTest(unittest.TestCase):
 
             def list(self, **options):
                 calls.append(("list", options))
-                return ["listed"]
+                return type("MockPaginator", (), {"next_items": lambda self: ["listed"]})()
 
             def get_sandbox(self, sandbox_id):
                 calls.append(("get_sandbox", sandbox_id))
@@ -46,8 +48,33 @@ class FacadeSandboxTest(unittest.TestCase):
         try:
             self.assertEqual(Sandbox.create("base", waitReady=True), "created")
             self.assertEqual(Sandbox.connect("sb-1", timeout=60), "connected")
-            self.assertEqual(Sandbox.list(limit=10), ["listed"])
-            self.assertEqual(Sandbox.get_info("sb-1"), {"sandboxID": "sb-1"})
+            self.assertEqual(Sandbox.list(limit=10).next_items(), ["listed"])
+            self.assertEqual(Sandbox.get_info("sb-1"), {
+                "sandbox_id": "sb-1",
+                "template_id": None,
+                "sandbox_domain": None,
+                "started_at": None,
+                "end_at": None,
+                "state": "",
+                "metadata": None,
+                "name": None,
+                "cpu_count": None,
+                "memory_mb": None,
+                "envd_access_token": None,
+            })
+            self.assertEqual(Sandbox.get_full_info("sb-1"), {
+                "sandbox_id": "sb-1",
+                "template_id": None,
+                "sandbox_domain": None,
+                "started_at": None,
+                "end_at": None,
+                "state": "",
+                "metadata": None,
+                "name": None,
+                "cpu_count": None,
+                "memory_mb": None,
+                "envd_access_token": None,
+            })
         finally:
             facade_module.GatewayClient = original_facade_client
 
@@ -55,8 +82,9 @@ class FacadeSandboxTest(unittest.TestCase):
         self.assertEqual(calls[3], ("connect", {"sandbox_id": "sb-1", "timeout": 60}))
         self.assertEqual(calls[5], ("list", {"limit": 10}))
         self.assertEqual(calls[7], ("get_sandbox", "sb-1"))
+        self.assertEqual(calls[9], ("get_sandbox", "sb-1"))
 
-    def test_gateway_client_create_allows_missing_template_id(self) -> None:
+    def test_gateway_client_create_requires_template_id(self) -> None:
         class MockClient(GatewayClient):
             def __init__(self) -> None:
                 super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
@@ -69,9 +97,9 @@ class FacadeSandboxTest(unittest.TestCase):
                 }
 
         client = MockClient()
-        created = client.create(waitReady=True)
-        self.assertEqual(client.body, {"waitReady": True})
-        self.assertIsNone(created.raw["templateID"])
+        created = client.create("base", waitReady=True)
+        self.assertEqual(client.body, {"templateID": "base", "waitReady": True})
+        self.assertEqual(created.raw["templateID"], "base")
 
     def test_bound_sandbox_uses_attached_client(self) -> None:
         class MockRuntime:
@@ -126,6 +154,7 @@ class FacadeSandboxTest(unittest.TestCase):
         self.assertEqual(created.sandbox_id, "sb-1")
         self.assertEqual(reconnected.sandbox_id, "sb-1")
         self.assertEqual(created.sandbox_domain, "runtime.cloud.seaart.ai")
+        self.assertEqual(created.traffic_access_token, "unit-runtime-auth")
         self.assertTrue(created.is_running())
         self.assertEqual(created.get_metrics()["cpu"], 1)
         self.assertEqual(created.commands.exec("echo hi")["exit_code"], 0)
@@ -220,28 +249,51 @@ class FacadeSandboxTest(unittest.TestCase):
             "args": ["clone", "--branch", "main", "--depth", "1", "https://github.com/acme/repo.git", "/workspace/repo"],
             "cwd": None,
             "env": None,
-            "timeout": None,
+            "timeoutMs": None,
             "stdin": None,
         })
         self.assertEqual(created.files.write("/tmp/hello.txt", "hello"), {
+            "name": "hello.txt",
             "path": "/tmp/hello.txt",
-            "bytes_written": 5,
+            "type": "file",
         })
         self.assertEqual(created.files.write_files([
             {"path": "/tmp/a.txt", "content": "a"},
             {"path": "/tmp/b.txt", "content": "bb"},
         ]), [
-            {"path": "/tmp/a.txt", "bytes_written": 1},
-            {"path": "/tmp/b.txt", "bytes_written": 2},
+            {"name": "a.txt", "path": "/tmp/a.txt", "type": "file"},
+            {"name": "b.txt", "path": "/tmp/b.txt", "type": "file"},
         ])
 
     def test_filesystem_pty_proxy_and_extra_git_helpers(self) -> None:
         class MockStream:
             def __init__(self, frames) -> None:
                 self.frames = list(frames)
+                self.closed = False
 
             def next(self):
                 return self.frames.pop(0) if self.frames else None
+
+            def close(self):
+                self.closed = True
+
+        class MockResponse:
+            def __init__(self, data: bytes) -> None:
+                self._data = data
+                self.closed = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.close()
+                return False
+
+            def read(self):
+                return self._data
+
+            def close(self):
+                self.closed = True
 
         class MockRuntime:
             def __init__(self) -> None:
@@ -249,7 +301,7 @@ class FacadeSandboxTest(unittest.TestCase):
 
             def stat(self, body, options=None):
                 self.calls.append(("stat", body))
-                if body["path"] == "/tmp/missing":
+                if body["path"] in {"/tmp/missing", "/tmp/new"}:
                     raise NotFoundError("not found", status_code=404)
                 return {"entry": {"path": body["path"], "type": "FILE_TYPE_FILE"}}
 
@@ -268,9 +320,13 @@ class FacadeSandboxTest(unittest.TestCase):
                 self.calls.append(("move", body))
                 return {"entry": {"path": body["destination"], "type": "FILE_TYPE_FILE"}}
 
+            def read_file(self, request, options=None):
+                self.calls.append(("read_file", request.path))
+                return MockResponse(b"hello")
+
             def watch_dir(self, body, options=None):
                 self.calls.append(("watch_dir", body))
-                return "watch-stream"
+                return MockStream([{"filesystem": {"name": "a.txt", "type": "EVENT_TYPE_WRITE"}}])
 
             def start(self, body, options=None):
                 self.calls.append(("start", body))
@@ -323,11 +379,37 @@ class FacadeSandboxTest(unittest.TestCase):
         self.assertFalse(created.files.exists("/tmp/missing"))
         self.assertTrue(created.files.exists("/tmp/a.txt"))
         self.assertEqual(created.files.get_info("/tmp/a.txt")["path"], "/tmp/a.txt")
+        self.assertEqual(created.files.get_info("/tmp/a.txt")["type"], "file")
         self.assertEqual(created.files.list("/tmp", depth=1)[0]["path"], "/tmp/a.txt")
+        self.assertEqual(created.files.list("/tmp", depth=1)[0]["type"], "file")
         self.assertTrue(created.files.make_dir("/tmp/new"))
+        self.assertFalse(created.files.make_dir("/tmp/a.txt"))
+        self.assertEqual(created.files.read("/tmp/a.txt"), "hello")
+        self.assertEqual(created.files.read("/tmp/a.txt", format="bytes"), b"hello")
+        self.assertIsNotNone(created.files.read("/tmp/a.txt", format="stream"))
         created.files.remove("/tmp/old")
         self.assertEqual(created.files.rename("/tmp/a.txt", "/tmp/b.txt")["path"], "/tmp/b.txt")
-        self.assertEqual(created.files.watch_dir("/tmp", recursive=True), "watch-stream")
+        self.assertEqual(created.files.rename("/tmp/a.txt", "/tmp/b.txt")["type"], "file")
+        watch_events = []
+        watch_seen = threading.Event()
+        watch = created.files.watch_dir(
+            "/tmp",
+            lambda event: (watch_events.append(event), watch_seen.set()),
+            recursive=True,
+        )
+        self.assertTrue(watch_seen.wait(timeout=1.0))
+        watch.stop()
+        self.assertEqual(watch_events, [{"name": "a.txt", "type": "write"}])
+
+        download_url = created.download_url("/tmp/demo.txt", user="root", use_signature_expiration=3600)
+        upload_url = created.upload_url("/tmp/demo.txt", user="root")
+        self.assertIn("/sb-ops/files?", download_url)
+        self.assertIn("path=%2Ftmp%2Fdemo.txt", download_url)
+        self.assertIn("username=root", download_url)
+        self.assertIn("signature_expiration=3600", download_url)
+        self.assertIn("signature=v1_", download_url)
+        self.assertIn("/sb-ops/files?", upload_url)
+        self.assertIn("signature=v1_", upload_url)
 
         pty_handle = created.pty.create("bash", size={"cols": 90, "rows": 30})
         connected = created.pty.connect(77)
@@ -338,7 +420,7 @@ class FacadeSandboxTest(unittest.TestCase):
         self.assertFalse(created.pty.kill(404))
         self.assertFalse(created.pty.kill(405))
 
-        created.git.pull("/workspace/repo", envs={"A": "1"}, timeout=5)
+        created.git.pull("/workspace/repo", envs={"A": "1"}, timeout_ms=5_000)
         created.git.checkout("main", "/workspace/repo")
         created.git.status("/workspace/repo")
         self.assertEqual(created.proxy(object()), {"status": 200})
@@ -351,7 +433,7 @@ class FacadeSandboxTest(unittest.TestCase):
             "args": ["pull"],
             "cwd": "/workspace/repo",
             "env": {"A": "1"},
-            "timeout": 5,
+            "timeoutMs": 5000,
             "stdin": None,
         }))
         self.assertEqual(mock_client.runtime.calls[-3], ("run", {
@@ -359,7 +441,7 @@ class FacadeSandboxTest(unittest.TestCase):
             "args": ["checkout", "main"],
             "cwd": "/workspace/repo",
             "env": None,
-            "timeout": None,
+            "timeoutMs": None,
             "stdin": None,
         }))
         self.assertEqual(mock_client.runtime.calls[-2], ("run", {
@@ -367,7 +449,7 @@ class FacadeSandboxTest(unittest.TestCase):
             "args": ["status"],
             "cwd": "/workspace/repo",
             "env": None,
-            "timeout": None,
+            "timeoutMs": None,
             "stdin": None,
         }))
 
@@ -396,11 +478,20 @@ class FacadeSandboxTest(unittest.TestCase):
                     ])
                 return MockStream([
                     {"event": {"start": {"pid": 41, "cmdId": "cmd-bg"}}},
+                    {"event": {"data": {"stdout": base64.b64encode(b"live\n").decode("ascii")}}},
                     {"event": {"end": {"exited": True, "status": "exited", "error": None}}},
                 ])
 
             def send_input(self, body, options=None):
                 self.calls.append(("send_input", body))
+
+            def connect(self, body, options=None):
+                self.calls.append(("connect", body))
+                return MockStream([
+                    {"event": {"start": {"pid": 41, "cmdId": "cmd-bg"}}},
+                    {"event": {"data": {"stdout": base64.b64encode(b"live\n").decode("ascii")}}},
+                    {"event": {"end": {"exited": True, "status": "exited", "error": None}}},
+                ])
 
             def get_result(self, body, options=None):
                 if body["cmdId"] == "cmd-bg":
@@ -426,12 +517,20 @@ class FacadeSandboxTest(unittest.TestCase):
         handle = created.commands.run("cat", background=True)
         handle.send_stdin("ping\n")
         waited = handle.wait()
+        stdout_chunks = []
+        streamed = created.commands.run("cat", stdin=False, on_stdout=lambda chunk: stdout_chunks.append(chunk))
+        connect_chunks = []
+        connected = created.commands.connect(41, on_stdout=lambda chunk: connect_chunks.append(chunk))
+        connected.wait()
 
         pty_handle = created.pty.create("bash")
-        pty_handle.send_stdin("ls\n")
+        pty_handle.send_input("ls\n")
         pty_waited = pty_handle.wait()
 
         self.assertEqual(waited["stdout"], "ping\n")
+        self.assertEqual(streamed["stdout"], "ping\n")
+        self.assertEqual(stdout_chunks, ["live\n"])
+        self.assertEqual(connect_chunks, ["live\n"])
         self.assertEqual(pty_waited["pty"], "shell$ ")
         send_inputs = [call for call in created._client.runtime.calls if call[0] == "send_input"]
         self.assertEqual(send_inputs[0], ("send_input", {
@@ -479,17 +578,73 @@ class FacadeSandboxTest(unittest.TestCase):
             "state": "running",
         })
 
-        created.commands.run("echo", args=["hello"], timeout=2, request_timeout=3.5, user="app")
-        created.pty.create("bash", timeout=4, request_timeout=5.5, user="root")
+        created.commands.run("echo", args=["hello"], timeout_ms=2_000, request_timeout_ms=3_500, user="app")
+        created.pty.create("bash", timeout_ms=4_000, request_timeout_ms=5_500, user="root")
 
         run_call = created._client.runtime.calls[0]
         start_call = created._client.runtime.calls[1]
         self.assertEqual(run_call[1]["cmd"], "sh")
         self.assertIn("su -s /bin/sh 'app'", run_call[1]["args"][1])
-        self.assertEqual(run_call[2].request_timeout, 3.5)
+        self.assertEqual(run_call[2].request_timeout_ms, 3_500)
         self.assertEqual(start_call[1]["process"]["cmd"], "sh")
         self.assertIn("su -s /bin/sh 'root'", start_call[1]["process"]["args"][1])
-        self.assertEqual(start_call[2].request_timeout, 5.5)
+        self.assertEqual(start_call[2].request_timeout_ms, 5_500)
+
+    def test_pause_returns_boolean_and_timeout_helpers_use_millisecond_protocol(self) -> None:
+        class MockStream:
+            def __init__(self, frames) -> None:
+                self.frames = list(frames)
+
+            def next(self):
+                return self.frames.pop(0) if self.frames else None
+
+        class MockRuntime:
+            def __init__(self) -> None:
+                self.calls = []
+
+            def run(self, body, options=None):
+                self.calls.append(("run", body, options))
+                return {"stdout": "ok\n", "stderr": "", "exit_code": 0, "duration_ms": 1}
+
+            def start(self, body, options=None):
+                self.calls.append(("start", body, options))
+                return MockStream([{"event": {"start": {"pid": 77}}}])
+
+        class MockClient:
+            def __init__(self) -> None:
+                self.runtime = MockRuntime()
+                self.calls = []
+
+            def runtime_from_sandbox(self, sandbox):
+                return self.runtime
+
+            def pause_sandbox(self, sandbox_id):
+                self.calls.append(("pause_sandbox", sandbox_id))
+
+            def set_sandbox_timeout(self, sandbox_id, body):
+                self.calls.append(("set_sandbox_timeout", sandbox_id, body))
+
+        created = Sandbox(MockClient(), {
+            "sandboxID": "sb-timeout-ms",
+            "templateID": "base",
+            "envdUrl": "https://runtime.cloud.seaart.ai/sb-timeout-ms",
+            "envdAccessToken": "unit-runtime-auth",
+            "status": "running",
+            "state": "running",
+        })
+
+        self.assertTrue(created.pause())
+        self.assertFalse(created.pause())
+        created.commands.run("echo", timeout_ms=1_000)
+        created.pty.create("bash", timeout_ms=2_000)
+        created.set_timeout(1_000)
+
+        run_call = created._client.runtime.calls[0]
+        start_call = created._client.runtime.calls[1]
+        timeout_call = created._client.calls[-1]
+        self.assertEqual(run_call[1]["timeoutMs"], 1000)
+        self.assertEqual(start_call[1]["timeoutMs"], 2000)
+        self.assertEqual(timeout_call, ("set_sandbox_timeout", "sb-timeout-ms", {"timeout": 1000}))
 
     def test_run_code_uses_default_python_context_and_preserves_execution_state(self) -> None:
         class MockResponse:
@@ -577,7 +732,7 @@ class FacadeSandboxTest(unittest.TestCase):
         execution1 = created.run_code(
             "print(42)",
             cwd="/workspace",
-            timeout=30,
+            timeout_ms=30_000,
             on_stdout=lambda chunk: stdout.append(chunk),
             on_stderr=lambda chunk: stderr.append(chunk),
             on_result=lambda result: results.append(result),
@@ -608,7 +763,7 @@ class FacadeSandboxTest(unittest.TestCase):
                 "cwd": "/workspace",
             },
             "stdin": True,
-            "timeout": 30,
+            "timeoutMs": 30000,
         }))
         send_inputs = [call for call in created._client.runtime.calls if call[0] == "send_input"]
         self.assertEqual(len(send_inputs), 2)
@@ -659,7 +814,7 @@ class FacadeSandboxTest(unittest.TestCase):
             "state": "running",
         })
 
-        context = created.create_code_context(cwd="/workspace", language="python", timeout=10)
+        context = created.create_code_context(cwd="/workspace", language="python", timeout_ms=10_000)
         self.assertIsInstance(context, CodeContext)
         self.assertEqual(len(created.list_code_contexts()), 1)
         restarted = created.restart_code_context(context)
@@ -727,7 +882,7 @@ class FacadeSandboxTest(unittest.TestCase):
             "state": "running",
         })
 
-        context = created.create_code_context(cwd="/workspace/app", language="bash", timeout=12)
+        context = created.create_code_context(cwd="/workspace/app", language="bash", timeout_ms=12_000)
         execution = created.run_code("echo hi", context=context)
 
         self.assertEqual(context.language, "bash")
@@ -740,7 +895,7 @@ class FacadeSandboxTest(unittest.TestCase):
                 "args": [ANY],
                 "cwd": "/workspace/app",
             },
-            "timeout": 12,
+            "timeoutMs": 12000,
         }))
         created.remove_code_context(context)
         self.assertEqual(created.list_code_contexts(), [])
@@ -1024,7 +1179,6 @@ class FacadeTemplateTest(unittest.TestCase):
         client.build = MockBuildService()
         listed = client.list_templates({
             "visibility": "team",
-            "team_id": "team-1",
             "limit": 20,
             "offset": 40,
         })
@@ -1034,7 +1188,6 @@ class FacadeTemplateTest(unittest.TestCase):
         self.assertEqual(listed[0]["templateID"], "tpl-direct")
         self.assertEqual(detail["templateID"], "tpl-direct")
         self.assertEqual(calls[1][1].visibility, "team")
-        self.assertEqual(calls[1][1].team_id, "team-1")
         self.assertEqual(calls[1][1].limit, 20)
         self.assertEqual(calls[1][1].offset, 40)
         self.assertNotIn(("resolve_template_ref", "tpl-direct"), calls)
@@ -1304,6 +1457,17 @@ class FacadeTemplateTest(unittest.TestCase):
             def delete_template(self, ref):
                 calls.append(("delete_template", ref))
 
+            def assign_template_tags(self, target_name, tags):
+                calls.append(("assign_template_tags", {"target_name": target_name, "tags": tags}))
+                return {"build_id": "build-1", "tags": ["v1", "stable"]}
+
+            def get_template_tags(self, template_id):
+                calls.append(("get_template_tags", template_id))
+                return [{"build_id": "build-1", "created_at": "2026-01-01T00:01:00Z", "tag": "stable"}]
+
+            def remove_template_tags(self, name, tags):
+                calls.append(("remove_template_tags", {"name": name, "tags": tags}))
+
             def template_exists(self, ref):
                 calls.append(("template_exists", ref))
                 return True
@@ -1326,6 +1490,15 @@ class FacadeTemplateTest(unittest.TestCase):
             self.assertEqual(Template.list(limit=10), [{"templateID": "tpl-1"}])
             self.assertEqual(Template.get("tpl-1", params={"limit": 5})["templateID"], "tpl-1")
             Template.delete("tpl-1")
+            self.assertEqual(
+                Template.assign_tags("demo:v1", ["stable", "prod"]),
+                {"build_id": "build-1", "tags": ["v1", "stable"]},
+            )
+            self.assertEqual(
+                Template.get_tags("demo"),
+                [{"build_id": "build-1", "created_at": "2026-01-01T00:01:00Z", "tag": "stable"}],
+            )
+            Template.remove_tags("demo", "stable")
             self.assertTrue(Template.exists("tpl-1"))
             self.assertEqual(
                 Template.get_build_status({"template_id": "tpl-1", "build_id": "build-1"}, limit=10)["status"],
@@ -1340,6 +1513,9 @@ class FacadeTemplateTest(unittest.TestCase):
         self.assertEqual(calls[1][0], "build_template")
         self.assertIn(("list_templates", {"limit": 10}), calls)
         self.assertIn(("get_template", {"ref": "tpl-1", "params": {"limit": 5}}), calls)
+        self.assertIn(("assign_template_tags", {"target_name": "demo:v1", "tags": ["stable", "prod"]}), calls)
+        self.assertIn(("get_template_tags", "demo"), calls)
+        self.assertIn(("remove_template_tags", {"name": "demo", "tags": "stable"}), calls)
         self.assertGreaterEqual(calls.count(("init", {})), 1)
         self.assertEqual(calls[-1], ("get_template_build_status", {"data": {"template_id": "tpl-1", "build_id": "build-1"}, "options": {"limit": 10}}))
 

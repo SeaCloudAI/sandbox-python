@@ -498,6 +498,7 @@ class CommandService:
             method=method.upper(),
         )
         request_timeout = self.timeout if timeout is None else timeout
+        request_timeout_ms = int(round(request_timeout * 1000))
         attempts = 2 if self._should_retry_stream_open(method, path) else 1
 
         for attempt in range(attempts):
@@ -509,9 +510,9 @@ class CommandService:
                     return exc
                 raise self._decode_api_error(exc) from exc
             except TimeoutError as exc:
-                raise RequestTimeoutError(request_timeout, cause=exc) from exc
+                raise RequestTimeoutError(request_timeout_ms, cause=exc) from exc
             except socket.timeout as exc:
-                raise RequestTimeoutError(request_timeout, cause=exc) from exc
+                raise RequestTimeoutError(request_timeout_ms, cause=exc) from exc
             except (URLError, ssl.SSLError) as exc:
                 if attempt + 1 < attempts and self._is_retryable_stream_open_error(exc):
                     continue
@@ -576,9 +577,9 @@ class CommandService:
     def _timeout_from_options(self, options: CmdRequestOptions | None) -> float | None:
         if options is None:
             return None
-        if options.request_timeout is not None:
-            return options.request_timeout
-        return options.timeout
+        if options.request_timeout_ms is None:
+            return None
+        return options.request_timeout_ms / 1000
 
     def _validate_selector(self, selector: Mapping[str, Any]) -> None:
         has_pid = selector.get("pid") is not None

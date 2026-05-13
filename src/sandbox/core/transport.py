@@ -25,12 +25,12 @@ class BaseTransport:
         domain: str | None = None,
         project_id: str | None = None,
         timeout: float = 30.0,
-        request_timeout: float | None = None,
+        request_timeout_ms: int | None = None,
     ) -> None:
         normalized_base_url = _resolve_base_url(base_url=base_url, domain=domain)
-        normalized_api_key = (api_key or os.getenv("E2B_API_KEY") or "").strip()
-        normalized_project_id = (project_id or os.getenv("SEACLOUD_PROJECT_ID") or "").strip()
-        resolved_timeout = timeout if request_timeout is None else request_timeout
+        normalized_api_key = (api_key or os.getenv("SEACLOUD_API_KEY") or "").strip()
+        normalized_project_id = (project_id or "").strip()
+        resolved_timeout = timeout if request_timeout_ms is None else request_timeout_ms / 1000
 
         if not normalized_base_url:
             raise ConfigurationError("base_url is required")
@@ -39,6 +39,7 @@ class BaseTransport:
 
         self.base_url = normalized_base_url
         self.timeout = resolved_timeout
+        self.timeout_ms = int(round(resolved_timeout * 1000))
         self._default_headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {normalized_api_key}",
@@ -75,8 +76,9 @@ class BaseTransport:
             method=method.upper(),
         )
 
-    def open(self, request: Request):
-        return urlopen(request, timeout=self.timeout)
+    def open(self, request: Request, *, request_timeout_ms: int | None = None):
+        timeout = self.timeout if request_timeout_ms is None else int(request_timeout_ms) / 1000
+        return urlopen(request, timeout=timeout)
 
     def metrics(self) -> str:
         return self._request_text("GET", "/metrics")
@@ -92,6 +94,7 @@ class BaseTransport:
         headers: Mapping[str, str] | None = None,
         body: Mapping[str, Any] | None = None,
         expected_statuses: tuple[int, ...] = (200,),
+        request_timeout_ms: int | None = None,
     ) -> Any:
         response = self._request_response(
             method,
@@ -99,6 +102,7 @@ class BaseTransport:
             headers=headers,
             body=body,
             expected_statuses=expected_statuses,
+            request_timeout_ms=request_timeout_ms,
         )
         with response:
             payload = response.read()
@@ -111,12 +115,14 @@ class BaseTransport:
         *,
         headers: Mapping[str, str] | None = None,
         expected_statuses: tuple[int, ...] = (200,),
+        request_timeout_ms: int | None = None,
     ) -> str:
         response = self._request_response(
             method,
             path,
             headers=headers,
             expected_statuses=expected_statuses,
+            request_timeout_ms=request_timeout_ms,
         )
         with response:
             return response.read().decode("utf-8")
@@ -129,6 +135,7 @@ class BaseTransport:
         headers: Mapping[str, str] | None = None,
         body: Mapping[str, Any] | None = None,
         expected_statuses: tuple[int, ...] = (204,),
+        request_timeout_ms: int | None = None,
     ) -> None:
         response = self._request_response(
             method,
@@ -136,6 +143,7 @@ class BaseTransport:
             headers=headers,
             body=body,
             expected_statuses=expected_statuses,
+            request_timeout_ms=request_timeout_ms,
         )
         with response:
             response.read()
@@ -148,19 +156,23 @@ class BaseTransport:
         headers: Mapping[str, str] | None = None,
         body: Mapping[str, Any] | None = None,
         expected_statuses: tuple[int, ...] = (200,),
+        request_timeout_ms: int | None = None,
     ):
         payload = None if body is None else json.dumps(body).encode("utf-8")
         if payload is None and method.upper() in {"POST", "PUT", "PATCH"}:
             payload = b""
         request = self.build_request(method, path, headers=headers, data=payload)
         try:
-            response = self.open(request)
+            if request_timeout_ms is None:
+                response = self.open(request)
+            else:
+                response = self.open(request, request_timeout_ms=request_timeout_ms)
         except HTTPError as exc:
             raise self._decode_api_error(exc) from exc
         except TimeoutError as exc:
-            raise RequestTimeoutError(self.timeout, cause=exc) from exc
+            raise RequestTimeoutError(self.timeout_ms if request_timeout_ms is None else int(request_timeout_ms), cause=exc) from exc
         except socket.timeout as exc:
-            raise RequestTimeoutError(self.timeout, cause=exc) from exc
+            raise RequestTimeoutError(self.timeout_ms if request_timeout_ms is None else int(request_timeout_ms), cause=exc) from exc
 
         status_code = getattr(response, "status", response.getcode())
         if status_code not in expected_statuses:
@@ -200,7 +212,7 @@ def _resolve_base_url(*, base_url: str | None, domain: str | None) -> str:
     if explicit_domain:
         return _normalize_domain(explicit_domain)
 
-    env_domain = os.getenv("E2B_DOMAIN", "").strip()
+    env_domain = os.getenv("SEACLOUD_BASE_URL", "").strip()
     if env_domain:
         return _normalize_domain(env_domain)
 

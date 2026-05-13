@@ -31,11 +31,19 @@ class SandboxInstance(dict[str, Any]):
     def reload(self) -> SandboxInstance:
         return self._client.get_sandbox(str(self["sandboxID"]))
 
+    def get_full_info(self) -> SandboxInstance:
+        return self._client.get_sandbox(str(self["sandboxID"]))
+
     def logs(self, params: SandboxLogsParams | None = None) -> dict[str, Any]:
         return self._client.get_sandbox_logs(str(self["sandboxID"]), params)
 
-    def pause(self) -> None:
+    def pause(self) -> bool:
+        if str(self.get("state") or self.get("status") or "").lower() == "paused":
+            return False
         self._client.pause_sandbox(str(self["sandboxID"]))
+        self["state"] = "paused"
+        self["status"] = "paused"
+        return True
 
     def delete(self) -> None:
         self._client.delete_sandbox(str(self["sandboxID"]))
@@ -44,7 +52,10 @@ class SandboxInstance(dict[str, Any]):
         self._client.refresh_sandbox(str(self["sandboxID"]), body)
 
     def set_timeout(self, timeout: int) -> None:
-        self._client.set_sandbox_timeout(str(self["sandboxID"]), {"timeout": timeout})
+        self._client.set_sandbox_timeout(
+            str(self["sandboxID"]),
+            {"timeout": int(timeout)},
+        )
 
     def connect(self, body: dict[str, Any]) -> ConnectSandboxResponse:
         return self._client.connect_sandbox(str(self["sandboxID"]), body)

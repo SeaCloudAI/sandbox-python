@@ -26,34 +26,6 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
         cls.service = BuildService(base_url=base_url, api_key=api_key)
         cls.build_image = build_image
 
-    def test_direct_build_polling(self) -> None:
-        direct = self.service.direct_build({
-            "project": "sdk-build-integration",
-            "image": "python-direct-build",
-            "tag": f"t{time.time_ns()}",
-            "dockerfile": "FROM alpine:3.20\nRUN echo direct-build-test >/tmp/direct-build.txt\n",
-        })
-        template_id = direct["templateID"]
-        build_id = direct["buildID"]
-        self.assertTrue(template_id)
-        self.assertTrue(build_id)
-
-        try:
-            status = self._wait_for_build_ready(template_id, build_id)
-            self.assertEqual(status["status"], "ready")
-
-            build = self.service.get_build(template_id, build_id)
-            self.assertEqual(build["buildID"], build_id)
-
-            logs = self.service.get_build_logs(template_id, build_id)
-            self.assertIsInstance(logs["logs"], list)
-        finally:
-            try:
-                self.service.delete_template(template_id)
-            except APIError as exc:
-                if exc.status_code != 404:
-                    raise
-
     def test_template_lifecycle(self) -> None:
         name = f"python-build-sdk-{time.time_ns()}"
         created = self.service.create_template({

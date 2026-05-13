@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Mapping
 from .build.service import BuildService
 from .cmd.service import CommandService
 from .control.service import ControlService
-from .control.models import ConnectSandboxResponse
+from .control.models import ConnectSandboxResponse, ListSandboxesParams
 from .core.exceptions import ConfigurationError
 from .runtime import Runtime
 from .sandbox import SandboxInstance
@@ -25,7 +25,7 @@ class GatewayClient(ControlService):
         domain: str | None = None,
         project_id: str | None = None,
         timeout: float = 30.0,
-        request_timeout: float | None = None,
+        request_timeout_ms: int | None = None,
     ) -> None:
         super().__init__(
             base_url=base_url,
@@ -33,7 +33,7 @@ class GatewayClient(ControlService):
             domain=domain,
             project_id=project_id,
             timeout=timeout,
-            request_timeout=request_timeout,
+            request_timeout_ms=request_timeout_ms,
         )
         self.build = BuildService(
             base_url=base_url,
@@ -41,30 +41,33 @@ class GatewayClient(ControlService):
             domain=domain,
             project_id=project_id,
             timeout=timeout,
-            request_timeout=request_timeout,
+            request_timeout_ms=request_timeout_ms,
         )
 
     def cmd(self, *, base_url: str, access_token: str = "", timeout: float = 30.0) -> CommandService:
         return self.runtime(base_url=base_url, access_token=access_token, timeout=timeout)
 
-    def create_sandbox(self, body: Mapping[str, Any]) -> SandboxInstance:
-        return SandboxInstance(self, super().create_sandbox(body))
+    def create_sandbox(self, body: Mapping[str, Any], *, request_timeout_ms: int | None = None) -> SandboxInstance:
+        return SandboxInstance(self, super().create_sandbox(body, request_timeout_ms=request_timeout_ms))
 
-    def get_sandbox(self, sandbox_id: str) -> SandboxInstance:
-        return SandboxInstance(self, super().get_sandbox(sandbox_id))
+    def get_sandbox(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> SandboxInstance:
+        return SandboxInstance(self, super().get_sandbox(sandbox_id, request_timeout_ms=request_timeout_ms))
 
     def list_sandboxes(
         self,
         params: Mapping[str, Any] | None = None,
+        request_timeout_ms: int | None = None,
     ) -> list[SandboxInstance]:
-        return [SandboxInstance(self, item) for item in super().list_sandboxes(params)]
+        return [SandboxInstance(self, item) for item in super().list_sandboxes(params, request_timeout_ms=request_timeout_ms)]
 
     def connect_sandbox(
         self,
         sandbox_id: str,
         body: Mapping[str, Any],
+        *,
+        request_timeout_ms: int | None = None,
     ) -> ConnectSandboxResponse:
-        response = super().connect_sandbox(sandbox_id, body)
+        response = super().connect_sandbox(sandbox_id, body, request_timeout_ms=request_timeout_ms)
         return ConnectSandboxResponse(
             status_code=response.status_code,
             sandbox=SandboxInstance(self, dict(response.sandbox)),
@@ -103,7 +106,7 @@ class GatewayClient(ControlService):
 
     def create(
         self,
-        template_or_options: str | Mapping[str, Any] | None = None,
+        template_or_options: str | Mapping[str, Any],
         **options: Any,
     ) -> Sandbox:
         from .facade import Sandbox
@@ -114,7 +117,9 @@ class GatewayClient(ControlService):
         else:
             body = dict(template_or_options or {})
             body.update(options)
-        created = self.create_sandbox(_filter_create_body(body))
+        request_timeout_ms = body.get("request_timeout_ms")
+        kwargs = {} if request_timeout_ms is None else {"request_timeout_ms": int(request_timeout_ms)}
+        created = self.create_sandbox(_filter_create_body(body), **kwargs)
         return Sandbox(self, created)
 
     def connect(
@@ -122,19 +127,32 @@ class GatewayClient(ControlService):
         sandbox_id: str,
         *,
         timeout: int | None = None,
+        request_timeout_ms: int | None = None,
     ) -> Sandbox:
         from .facade import Sandbox
 
-        response = self.connect_sandbox(sandbox_id, {"timeout": _normalize_connect_timeout(timeout=timeout)})
+        response = self.connect_sandbox(
+            sandbox_id,
+            {"timeout": _normalize_connect_timeout_seconds(timeout=timeout)},
+            request_timeout_ms=request_timeout_ms,
+        )
         return Sandbox(self, response.sandbox)
 
-    def list(self, **options: Any) -> list[Sandbox]:
+    def list(self, **options: Any):
+        from .facade import SandboxPaginator
+
         params = {
             key: value
             for key, value in options.items()
             if key in {"metadata", "state", "limit", "next_token"}
         }
-        return self.list_sandboxes(params or None)
+        return SandboxPaginator(
+            lambda **page_options: self.list_sandboxes(
+                params=ListSandboxesParams(**page_options),
+                request_timeout_ms=options.get("request_timeout_ms"),
+            ),
+            params,
+        )
 
     def build_template(
         self,
@@ -230,20 +248,44 @@ class GatewayClient(ControlService):
 
         _delete_template_with_service(self.build, ref)
 
+    def assign_template_tags(self, target_name: str, tags: str | list[str]) -> dict[str, Any]:
+        from .template import _assign_template_tags_with_service
+
+        return _assign_template_tags_with_service(self.build, target_name, tags)
+
+    def get_template_tags(self, template_id: str) -> list[dict[str, Any]]:
+        from .template import _get_template_tags_with_service
+
+        return _get_template_tags_with_service(self.build, template_id)
+
+    def remove_template_tags(self, name: str, tags: str | list[str]) -> None:
+        from .template import _remove_template_tags_with_service
+
+        _remove_template_tags_with_service(self.build, name, tags)
+
 
 def _filter_create_body(source: Mapping[str, Any]) -> dict[str, Any]:
+    _reject_unsupported_create_fields(source)
     template_id = source.get("template")
     normalized_template_id = str(template_id).strip() if template_id is not None else ""
+    if not normalized_template_id:
+        raise ConfigurationError("templateID is required")
     body = {
-        "templateID": normalized_template_id or None,
-        "timeout": _normalize_lifecycle_timeout(source),
+        "templateID": normalized_template_id,
+        "timeout": _normalize_lifecycle_timeout_seconds(source),
+        "autoPause": source.get("autoPause"),
         "metadata": source.get("metadata"),
         "envVars": source.get("envs"),
         "waitReady": source.get("waitReady"),
     }
     return {key: value for key, value in body.items() if value is not None}
 
-def _normalize_timeout_seconds(timeout: Any, *, allow_zero: bool = False) -> int | None:
+def _reject_unsupported_create_fields(source: Mapping[str, Any]) -> None:
+    for key in ("autoResume", "secure", "allow_internet_access", "network", "mcp", "volumeMounts"):
+        if key in source:
+            raise ConfigurationError(f"{key} is not supported")
+
+def _normalize_timeout_seconds(timeout: Any = None, *, allow_zero: bool = False) -> int | None:
     if timeout is None:
         return None
     timeout_value = int(timeout)
@@ -253,11 +295,11 @@ def _normalize_timeout_seconds(timeout: Any, *, allow_zero: bool = False) -> int
     return timeout_value
 
 
-def _normalize_lifecycle_timeout(source: Mapping[str, Any]) -> int | None:
+def _normalize_lifecycle_timeout_seconds(source: Mapping[str, Any]) -> int | None:
     return _normalize_timeout_seconds(source.get("timeout"), allow_zero=True)
 
 
-def _normalize_connect_timeout(*, timeout: int | None) -> int:
+def _normalize_connect_timeout_seconds(*, timeout: int | None) -> int:
     if timeout is None:
         return 300
     return _normalize_timeout_seconds(timeout, allow_zero=True) or 0

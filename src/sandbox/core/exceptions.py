@@ -11,9 +11,9 @@ class TransportError(SandboxError):
 class RequestTimeoutError(TransportError):
     """Raised when a request exceeds the configured timeout."""
 
-    def __init__(self, timeout: float, *, cause: Exception | None = None) -> None:
-        super().__init__(f"request timed out after {timeout:g}s")
-        self.timeout = timeout
+    def __init__(self, timeout_ms: int, *, cause: Exception | None = None) -> None:
+        super().__init__(f"request timed out after {timeout_ms}ms")
+        self.timeout_ms = timeout_ms
         self.__cause__ = cause
 
 

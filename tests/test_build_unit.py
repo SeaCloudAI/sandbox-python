@@ -72,7 +72,6 @@ class BuildServiceUnitTest(unittest.TestCase):
             .user("node")
             .start_cmd("npm start")
             .ready_cmd("test-ready-command")
-            .files_hash("b" * 64)
             .to_request()
         )
         self.assertEqual(request["fromImage"], "docker.io/library/node:20")
@@ -99,35 +98,9 @@ class BuildServiceUnitTest(unittest.TestCase):
         self.assertEqual(next_request["fromImage"], "docker.io/library/alpine:3.20")
         self.assertEqual(next_request["steps"][0]["args"][0], "src")
 
-    def test_system_and_direct_build(self) -> None:
+    def test_system_endpoints(self) -> None:
         service = MockBuildService(lambda request: FakeResponse(200, "metric 1\n"))
         self.assertEqual(service.metrics(), "metric 1\n")
-
-        def direct_handler(request):
-            self.assertEqual(request.full_url, "https://sandbox-gateway.cloud.seaart.ai/build")
-            self.assertIsNone(request.get_header("X-Namespace-ID"))
-            self.assertEqual(request.get_header("X-project-id"), "project-1")
-            self.assertEqual(request.get_header("Content-type"), "application/json")
-            self.assertEqual(json.loads(request.data.decode("utf-8")), {
-                "project": "proj",
-                "image": "app",
-                "tag": "v1",
-                "dockerfile": "FROM alpine:3.20",
-            })
-            return FakeResponse(202, json.dumps({
-                "templateID": "tpl-1",
-                "buildID": "build-1",
-                "imageFullName": "example-image:v1",
-            }))
-
-        service = MockBuildService(direct_handler)
-        response = service.direct_build({
-            "project": "proj",
-            "image": "app",
-            "tag": "v1",
-            "dockerfile": "FROM alpine:3.20",
-        })
-        self.assertEqual(response["templateID"], "tpl-1")
 
     def test_template_endpoints(self) -> None:
         calls = []
@@ -177,9 +150,11 @@ class BuildServiceUnitTest(unittest.TestCase):
                         "diskSizeMB": 5120,
                         "envdVersion": "sandbox-builder-v1",
                     }],
-                    "nextToken": "build-next",
                 }))
             if request.full_url.endswith("/api/v1/templates/tpl-1") and request.get_method() == "PATCH":
+                self.assertEqual(json.loads(request.data.decode("utf-8")), {
+                    "public": False,
+                })
                 return FakeResponse(200, json.dumps({"names": ["user/demo-2"]}))
             if request.full_url.endswith("/api/v1/templates/tpl-1") and request.get_method() == "DELETE":
                 return FakeResponse(204, "")
@@ -194,7 +169,6 @@ class BuildServiceUnitTest(unittest.TestCase):
         })
         listed = service.list_templates(ListTemplatesParams(
             visibility="team",
-            team_id="team-1",
             limit=20,
             offset=40,
         ))
@@ -205,7 +179,7 @@ class BuildServiceUnitTest(unittest.TestCase):
             GetTemplateParams(limit=10, next_token="build-1"),
         )
         updated = service.update_template("tpl-1", {
-            "extensions": {"envs": {"SDK_TEST": "1"}},
+            "public": False,
         })
         service.delete_template("tpl-1")
 
@@ -216,7 +190,6 @@ class BuildServiceUnitTest(unittest.TestCase):
         self.assertEqual(detail["templateID"], "tpl-1")
         self.assertEqual(detail["builds"][0]["status"], "ready")
         self.assertEqual(detail["builds"][0]["memoryMB"], 1024)
-        self.assertEqual(detail["nextToken"], "build-next")
         self.assertEqual(updated["names"], ["user/demo-2"])
         self.assertEqual(calls[-1][0], "DELETE")
 
@@ -234,7 +207,6 @@ class BuildServiceUnitTest(unittest.TestCase):
                 payload = json.loads(request.data.decode("utf-8")) if request.data else None
                 self.assertEqual(payload, {
                     "fromImage": "docker.io/library/node:20",
-                    "filesHash": "a" * 64,
                     "fromImageRegistry": {
                         "type": "registry",
                         "username": "robot",
@@ -304,7 +276,6 @@ class BuildServiceUnitTest(unittest.TestCase):
 
         encoded = service.create_build("tpl-1", "build-encoded", {
             "fromImage": "docker.io/library/node:20",
-            "filesHash": "a" * 64,
             "fromImageRegistry": {
                 "type": "registry",
                 "username": "robot",
@@ -392,9 +363,9 @@ class BuildServiceUnitTest(unittest.TestCase):
         with self.assertRaisesRegex(ValidationError, "template field visibility is not supported by the public SDK"):
             service.update_template("tpl-1", {"visibility": "official"})
         accepting_update.update_template("tpl-1", {
-            "extensions": {"baseTemplateID": "tpl-base-2", "storageType": "persistent", "volumeMounts": [{"name": "cache", "path": "/cache"}]},
+            "public": False,
         })
-        with self.assertRaisesRegex(ValidationError, "extensions.visibility=official is not supported by the public SDK"):
+        with self.assertRaisesRegex(ValidationError, "template field extensions is not supported by the public SDK"):
             service.update_template("tpl-1", {
                 "extensions": {"visibility": "official"},
             })

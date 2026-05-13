@@ -94,78 +94,70 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertEqual(response["sandboxID"], "sb-1")
         self.assertEqual(response.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
 
-    def test_create_sandbox_allows_missing_template_id(self) -> None:
+    def test_create_sandbox_requires_template_id(self) -> None:
         def handler(request):
             self.assertEqual(request.full_url, "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes")
-            self.assertEqual(json.loads(request.data.decode("utf-8")), {"waitReady": False})
+            self.assertEqual(json.loads(request.data.decode("utf-8")), {"templateID": "tpl", "waitReady": False})
             return FakeResponse(201, json.dumps({"sandboxID": "sb-2"}))
 
+        rejecting_client = MockGatewayClient(lambda request: self.fail("create_sandbox should validate templateID before sending"))
+        with self.assertRaises(ValidationError):
+            rejecting_client.create_sandbox({"waitReady": False})
+
         client = MockGatewayClient(handler)
-        response = client.create_sandbox({"waitReady": False})
+        response = client.create_sandbox({"templateID": "tpl", "waitReady": False})
         self.assertEqual(response["sandboxID"], "sb-2")
 
-    def test_gateway_client_falls_back_to_e2b_api_key(self) -> None:
-        previous = os.environ.get("E2B_API_KEY")
-        os.environ["E2B_API_KEY"] = "unit-auth-from-e2b"
+    def test_gateway_client_falls_back_to_seacloud_api_key(self) -> None:
+        previous = os.environ.get("SEACLOUD_API_KEY")
+        os.environ["SEACLOUD_API_KEY"] = "unit-auth-value"
         try:
             seen_headers = {}
 
-            class E2BGatewayEnvClient(GatewayClient):
+            class SeaCloudGatewayEnvClient(GatewayClient):
                 def open(self, request):
                     seen_headers.update({key.lower(): value for key, value in request.header_items()})
                     return FakeResponse(200, "[]")
 
-            response = E2BGatewayEnvClient(base_url="https://sandbox-gateway.cloud.seaart.ai").list_sandboxes()
+            response = SeaCloudGatewayEnvClient(base_url="https://sandbox-gateway.cloud.seaart.ai").list_sandboxes()
             self.assertEqual(response, [])
-            self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-from-e2b")
-            self.assertEqual(seen_headers["x-api-key"], "unit-auth-from-e2b")
+            self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-value")
+            self.assertEqual(seen_headers["x-api-key"], "unit-auth-value")
         finally:
             if previous is None:
-                del os.environ["E2B_API_KEY"]
+                del os.environ["SEACLOUD_API_KEY"]
             else:
-                os.environ["E2B_API_KEY"] = previous
+                os.environ["SEACLOUD_API_KEY"] = previous
 
-    def test_seacloud_compatibility_env_vars_are_ignored_for_gateway_config(self) -> None:
-        previous_e2b_api_key = os.environ.get("E2B_API_KEY")
-        previous_seacloud_api_key = os.environ.get("SEACLOUD_API_KEY")
-        previous_e2b_domain = os.environ.get("E2B_DOMAIN")
-        previous_seacloud_base_url = os.environ.get("SEACLOUD_BASE_URL")
-        os.environ["E2B_API_KEY"] = "unit-auth-from-e2b"
-        os.environ["SEACLOUD_API_KEY"] = "unit-auth-from-seacloud"
-        os.environ["E2B_DOMAIN"] = "e2b.example.test"
-        os.environ["SEACLOUD_BASE_URL"] = "https://seacloud.example.test"
+    def test_gateway_client_falls_back_to_seacloud_base_url(self) -> None:
+        previous_api_key = os.environ.get("SEACLOUD_API_KEY")
+        previous_base_url = os.environ.get("SEACLOUD_BASE_URL")
+        os.environ["SEACLOUD_API_KEY"] = "unit-auth-value"
+        os.environ["SEACLOUD_BASE_URL"] = "seacloud.example.test"
         try:
             seen_headers = {}
             seen_urls = []
 
-            class E2BPreferredGatewayEnvClient(GatewayClient):
+            class SeaCloudPreferredGatewayEnvClient(GatewayClient):
                 def open(self, request):
                     seen_urls.append(request.full_url)
                     seen_headers.update({key.lower(): value for key, value in request.header_items()})
                     return FakeResponse(200, "[]")
 
-            response = E2BPreferredGatewayEnvClient().list_sandboxes()
+            response = SeaCloudPreferredGatewayEnvClient().list_sandboxes()
             self.assertEqual(response, [])
-            self.assertTrue(seen_urls[0].startswith("https://e2b.example.test/"))
-            self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-from-e2b")
-            self.assertEqual(seen_headers["x-api-key"], "unit-auth-from-e2b")
+            self.assertTrue(seen_urls[0].startswith("https://seacloud.example.test/"))
+            self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-value")
+            self.assertEqual(seen_headers["x-api-key"], "unit-auth-value")
         finally:
-            if previous_e2b_api_key is None:
-                del os.environ["E2B_API_KEY"]
-            else:
-                os.environ["E2B_API_KEY"] = previous_e2b_api_key
-            if previous_seacloud_api_key is None:
+            if previous_api_key is None:
                 del os.environ["SEACLOUD_API_KEY"]
             else:
-                os.environ["SEACLOUD_API_KEY"] = previous_seacloud_api_key
-            if previous_e2b_domain is None:
-                del os.environ["E2B_DOMAIN"]
-            else:
-                os.environ["E2B_DOMAIN"] = previous_e2b_domain
-            if previous_seacloud_base_url is None:
+                os.environ["SEACLOUD_API_KEY"] = previous_api_key
+            if previous_base_url is None:
                 del os.environ["SEACLOUD_BASE_URL"]
             else:
-                os.environ["SEACLOUD_BASE_URL"] = previous_seacloud_base_url
+                os.environ["SEACLOUD_BASE_URL"] = previous_base_url
 
     def test_build_namespace_reuses_gateway_configuration(self) -> None:
         def handler(request):
@@ -234,7 +226,6 @@ class GatewayClientUnitTest(unittest.TestCase):
                 return FakeResponse(200, json.dumps([{
                     "sandboxID": "sb-1",
                     "clientID": "u1",
-                    "envdVersion": "v1",
                     "status": "running",
                 }]))
             if request.full_url.endswith("/logs"):
@@ -396,7 +387,7 @@ class GatewayClientUnitTest(unittest.TestCase):
         info = sandbox.get_info()
 
         self.assertEqual(sandbox.sandbox_id, "sb-high")
-        self.assertEqual(info["sandboxID"], "sb-high")
+        self.assertEqual(info["sandbox_id"], "sb-high")
         self.assertEqual(calls[0][2], {"templateID": "tpl", "waitReady": True})
         self.assertEqual(calls[1][1], "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes/sb-high")
 
@@ -445,7 +436,7 @@ class GatewayClientUnitTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             client.connect_sandbox("sb", {"timeout": -1})
         with self.assertRaises(ValidationError):
-            client.set_sandbox_timeout("sb", {"timeout": 86401})
+            client.set_sandbox_timeout("sb", {"timeout": 86_401})
         with self.assertRaises(ValidationError):
             client.refresh_sandbox("sb", {"duration": 3601})
         with self.assertRaises(ValidationError):
@@ -472,7 +463,7 @@ class GatewayClientUnitTest(unittest.TestCase):
         client = MockGatewayClient(handler)
         client.get_sandbox_logs("sb", SandboxLogsParams(cursor=0, limit=1000, direction="backward", search="x" * 256))
         client.connect_sandbox("sb", {"timeout": 0})
-        client.set_sandbox_timeout("sb", {"timeout": 86400})
+        client.set_sandbox_timeout("sb", {"timeout": 86_400})
         client.refresh_sandbox("sb", {"duration": 0})
         client.refresh_sandbox("sb", {"duration": 3600})
         client.send_heartbeat("sb", {"status": "healthy"})

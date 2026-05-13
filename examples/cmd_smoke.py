@@ -19,8 +19,8 @@ from sandbox import Sandbox
 
 
 def main() -> None:
-    if not os.getenv("E2B_API_KEY", "").strip():
-        raise RuntimeError("E2B_API_KEY is required")
+    if not os.getenv("SEACLOUD_API_KEY", "").strip():
+        raise RuntimeError("SEACLOUD_API_KEY is required")
 
     template_id = os.getenv("SANDBOX_EXAMPLE_TEMPLATE_ID", "").strip()
     if not template_id:

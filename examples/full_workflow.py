@@ -21,7 +21,7 @@ from sandbox.control.models import SandboxLogsParams
 
 
 def main() -> None:
-    must_env("E2B_API_KEY")
+    must_env("SEACLOUD_API_KEY")
     runtime_base_image = must_env("SANDBOX_EXAMPLE_RUNTIME_BASE_IMAGE")
     keep_resources = env_enabled("SANDBOX_EXAMPLE_KEEP_RESOURCES")
 
@@ -41,7 +41,7 @@ def main() -> None:
             wait=True,
             poll_interval=2.0,
             on_build_logs=lambda entry: _log_build_entry(entry, build_logger, build_log_count),
-            timeout=180.0,
+            request_timeout_ms=180_000,
         )
         template_id = built["template_id"]
         build_id = built["build_id"]

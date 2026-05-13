@@ -96,6 +96,35 @@ class Template:
         client.delete_template(ref)
 
     @classmethod
+    def assign_tags(
+        cls,
+        target_name: str,
+        tags: str | list[str],
+        **options: Any,
+    ) -> dict[str, Any]:
+        client = _new_high_level_client(options)
+        return client.assign_template_tags(target_name, tags)
+
+    @classmethod
+    def get_tags(
+        cls,
+        template_id: str,
+        **options: Any,
+    ) -> list[dict[str, Any]]:
+        client = _new_high_level_client(options)
+        return client.get_template_tags(template_id)
+
+    @classmethod
+    def remove_tags(
+        cls,
+        name: str,
+        tags: str | list[str],
+        **options: Any,
+    ) -> None:
+        client = _new_high_level_client(options)
+        client.remove_template_tags(name, tags)
+
+    @classmethod
     def exists(cls, ref: str, **options: Any) -> bool:
         client = _new_high_level_client(options)
         return client.template_exists(ref)
@@ -388,10 +417,6 @@ class Template:
         self._builder.ready_cmd(_ready_command_to_str(ready_command))
         return self
 
-    def files_hash(self, files_hash: str) -> "Template":
-        self._builder.files_hash(files_hash)
-        return self
-
     def request(self) -> dict[str, Any]:
         request = self._builder.to_request()
         for step in request.get("steps", []):
@@ -564,20 +589,20 @@ def _build_with_service(
 def _new_high_level_client(options: dict[str, Any]):
     from ._client import GatewayClient
 
-    request_timeout = _pop_high_level_request_timeout(options)
-    if request_timeout is None:
+    request_timeout_ms = _pop_high_level_request_timeout_ms(options)
+    if request_timeout_ms is None:
         return GatewayClient()
-    return GatewayClient(request_timeout=request_timeout)
+    return GatewayClient(request_timeout_ms=request_timeout_ms)
 
 
-def _pop_high_level_request_timeout(options: dict[str, Any]) -> float | None:
+def _pop_high_level_request_timeout_ms(options: dict[str, Any]) -> int | None:
     for key in ("base_url", "api_key", "domain", "project_id"):
         if options.get(key) is not None:
             raise ValidationError(
-                f"{key} is not supported on high-level Template helpers; use E2B_DOMAIN/E2B_API_KEY env vars",
+                f"{key} is not supported on high-level Template helpers; use SEACLOUD_BASE_URL/SEACLOUD_API_KEY env vars",
             )
-    request_timeout = options.pop("request_timeout", None)
-    return None if request_timeout is None else float(request_timeout)
+    request_timeout_ms = options.pop("request_timeout_ms", None)
+    return None if request_timeout_ms is None else int(request_timeout_ms)
 
 
 def _template_exists_with_service(service: BuildService, ref: str) -> bool:
@@ -586,6 +611,46 @@ def _template_exists_with_service(service: BuildService, ref: str) -> bool:
         return True
     except NotFoundError:
         return False
+
+
+def _assign_template_tags_with_service(
+    service: BuildService,
+    target_name: str,
+    tags: str | list[str],
+) -> dict[str, Any]:
+    response = service.assign_template_tags({
+        "target": target_name,
+        "tags": _normalize_template_tag_input(tags),
+    })
+    return {
+        "build_id": str(response.get("buildID") or ""),
+        "tags": list(response.get("tags") or []),
+    }
+
+
+def _get_template_tags_with_service(
+    service: BuildService,
+    template_id: str,
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "build_id": str(tag.get("buildID") or ""),
+            "created_at": str(tag.get("createdAt") or ""),
+            "tag": str(tag.get("tag") or ""),
+        }
+        for tag in service.list_template_tags(template_id)
+    ]
+
+
+def _remove_template_tags_with_service(
+    service: BuildService,
+    name: str,
+    tags: str | list[str],
+) -> None:
+    service.delete_template_tags({
+        "name": name,
+        "tags": _normalize_template_tag_input(tags),
+    })
 
 
 def _get_template_build_status_with_service(
@@ -625,7 +690,6 @@ def _list_templates_with_service(
         return service.list_templates(params)
     return service.list_templates(ListTemplatesParams(
             visibility=params.get("visibility"),
-            team_id=params.get("team_id"),
             limit=params.get("limit"),
             offset=params.get("offset"),
         ))
@@ -649,6 +713,18 @@ def _get_template_with_service(
 def _delete_template_with_service(service: BuildService, ref: str) -> None:
     template_id = ref if ref.startswith("tpl-") else service.resolve_template_ref(ref)["templateID"]
     service.delete_template(template_id)
+
+
+def _get_template_for_tag_mutation_with_service(service: BuildService, ref: str) -> dict[str, Any]:
+    original_error: NotFoundError | None = None
+    try:
+        return _get_template_with_service(service, ref)
+    except NotFoundError as exc:
+        original_error = exc
+    name, _ = _split_template_name_and_tags(ref)
+    if name == ref:
+        raise original_error if original_error is not None else NotFoundError(f"template {ref} not found")
+    return _get_template_with_service(service, name)
 
 
 def default_build_logger(*, min_level: str = "info") -> Callable[[LogEntry], None]:
@@ -706,6 +782,37 @@ def _normalize_optional_template_items(values: str | list[str] | None) -> list[s
     if values is None:
         return []
     return _normalize_template_items(values, "value")
+
+
+def _normalize_template_tag_input(values: str | list[str]) -> list[str]:
+    tags = _dedupe_template_tags(_normalize_template_items(values, "tags"))
+    if not tags:
+        raise ValidationError("tags are required")
+    return tags
+
+
+def _split_template_name_and_tags(name: str) -> tuple[str, list[str]]:
+    trimmed = name.strip()
+    if not trimmed or trimmed.count(":") != 1:
+        return trimmed, []
+    base, tag = trimmed.split(":", 1)
+    base = base.strip()
+    tag = tag.strip()
+    if not base or not tag:
+        return trimmed, []
+    return base, [tag]
+
+
+def _dedupe_template_tags(tags: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for raw_tag in tags:
+        tag = str(raw_tag).strip()
+        if not tag or tag in seen:
+            continue
+        seen.add(tag)
+        normalized.append(tag)
+    return normalized
 
 
 def _build_apt_install_command(packages: list[str], *, no_install_recommends: bool) -> str:

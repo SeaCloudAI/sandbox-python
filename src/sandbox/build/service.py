@@ -23,7 +23,7 @@ _TEMPLATE_CREATE_FIELDS = {
 }
 
 _TEMPLATE_UPDATE_FIELDS = {
-    "extensions",
+    "public",
 }
 
 _BUILD_REQUEST_FIELDS = {
@@ -32,25 +32,12 @@ _BUILD_REQUEST_FIELDS = {
     "fromImageRegistry",
     "force",
     "steps",
-    "filesHash",
-    "runtimeMode",
     "startCmd",
     "readyCmd",
 }
 
 
 class BuildService(BaseTransport):
-    def direct_build(self, body: Mapping[str, Any]) -> dict[str, Any]:
-        if body is None:
-            raise ValidationError("direct build request is required")
-        return self._request_json(
-            "POST",
-            "/build",
-            headers=self.build_headers({"Content-Type": "application/json"}),
-            body=body,
-            expected_statuses=(202,),
-        )
-
     def create_template(
         self,
         body: TemplateCreateRequest | None = None,
@@ -200,6 +187,30 @@ class BuildService(BaseTransport):
         )
         return self._request_json("GET", path)
 
+    def assign_template_tags(self, body: Mapping[str, Any]) -> dict[str, Any]:
+        self._validate_assign_template_tags_body(body)
+        return self._request_json(
+            "POST",
+            "/api/v1/templates/tags",
+            headers=self.build_headers({"Content-Type": "application/json"}),
+            body=body,
+            expected_statuses=(201,),
+        )
+
+    def delete_template_tags(self, body: Mapping[str, Any]) -> None:
+        self._validate_delete_template_tags_body(body)
+        self._request_empty(
+            "DELETE",
+            "/api/v1/templates/tags",
+            headers=self.build_headers({"Content-Type": "application/json"}),
+            body=body,
+            expected_statuses=(204,),
+        )
+
+    def list_template_tags(self, template_id: str) -> list[dict[str, Any]]:
+        self._require_template_id(template_id)
+        return self._request_json("GET", f"/api/v1/templates/{quote(template_id, safe='')}/tags")
+
     def _require_template_id(self, template_id: str) -> None:
         if not template_id.strip():
             raise ValidationError("template_id is required")
@@ -248,8 +259,22 @@ class BuildService(BaseTransport):
         for key in body.keys():
             if key not in _TEMPLATE_UPDATE_FIELDS:
                 raise ValidationError(f"template field {key} is not supported by the public SDK")
-        if body.get("extensions") is not None:
-            self._validate_template_extensions(body.get("extensions"))
+        if body.get("public") is not None and not isinstance(body.get("public"), bool):
+            raise ValidationError("public must be a boolean")
+
+    def _validate_assign_template_tags_body(self, body: Mapping[str, Any]) -> None:
+        if not str(body.get("target", "")).strip():
+            raise ValidationError("target is required")
+        self._validate_tags(body.get("tags"))
+
+    def _validate_delete_template_tags_body(self, body: Mapping[str, Any]) -> None:
+        if not str(body.get("name", "")).strip():
+            raise ValidationError("name is required")
+        self._validate_tags(body.get("tags"))
+
+    def _validate_tags(self, tags: Any) -> None:
+        if not isinstance(tags, list) or not [str(tag).strip() for tag in tags if str(tag).strip()]:
+            raise ValidationError("tags are required")
 
     def _validate_build_request(self, body: Mapping[str, Any] | None) -> None:
         if body is None:
@@ -259,12 +284,6 @@ class BuildService(BaseTransport):
                 raise ValidationError(f"build field {key} is not supported by the public SDK")
         if "buildID" in body:
             raise ValidationError("buildID must be provided in the create_build path, not in body")
-        files_hash = str(body.get("filesHash", "")).strip()
-        if files_hash and not self._is_sha256(files_hash):
-            raise ValidationError("filesHash must be a 64-character lowercase hex SHA256")
-        runtime_mode = str(body.get("runtimeMode", "")).strip()
-        if runtime_mode and runtime_mode not in {"managed", "plain"}:
-            raise ValidationError('runtimeMode must be "managed" or "plain"')
         if body.get("force") is not None and not isinstance(body.get("force"), bool):
             raise ValidationError("force must be a boolean")
         if body.get("fromImageRegistry") is not None:
@@ -348,8 +367,6 @@ class BuildService(BaseTransport):
         query: dict[str, Any] = {}
         if params.visibility:
             query["visibility"] = params.visibility
-        if params.team_id:
-            query["teamID"] = params.team_id
         if params.limit is not None:
             query["limit"] = str(params.limit)
         if params.offset is not None:
@@ -404,7 +421,7 @@ class BuildService(BaseTransport):
             body.get("fromImage", "")
         ).strip() and body.get("fromImageRegistry") is None and body.get("force") is None and not (
             body.get("steps") or []
-        ) and not str(body.get("filesHash", "")).strip() and not str(body.get("runtimeMode", "")).strip() and not str(body.get("startCmd", "")).strip() and not str(
+        ) and not str(body.get("startCmd", "")).strip() and not str(
             body.get("readyCmd", "")
         ).strip()
 

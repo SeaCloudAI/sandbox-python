@@ -20,8 +20,8 @@ from sandbox import Template, default_build_logger, wait_for_file
 
 
 def main() -> None:
-    if not os.getenv("E2B_API_KEY", "").strip():
-        raise RuntimeError("E2B_API_KEY is required")
+    if not os.getenv("SEACLOUD_API_KEY", "").strip():
+        raise RuntimeError("SEACLOUD_API_KEY is required")
 
     image = os.getenv("SANDBOX_EXAMPLE_BUILD_IMAGE", "").strip() or "docker.io/library/alpine:3.20"
     keep_resources = os.getenv("SANDBOX_EXAMPLE_KEEP_RESOURCES", "").strip().lower() in {"1", "true", "yes"}

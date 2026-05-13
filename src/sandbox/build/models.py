@@ -27,13 +27,12 @@ class TemplateCreateRequest(TypedDict, total=False):
 
 
 class TemplateUpdateRequest(TypedDict, total=False):
-    extensions: PublicTemplateExtensions
+    public: bool
 
 
 @dataclass
 class ListTemplatesParams:
     visibility: str | None = None
-    team_id: str | None = None
     limit: int | None = None
     offset: int | None = None
 

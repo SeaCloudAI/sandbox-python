@@ -19,7 +19,7 @@ from sandbox import Sandbox
 
 
 def main() -> None:
-    must_env("E2B_API_KEY")
+    must_env("SEACLOUD_API_KEY")
     template_id = must_env("SANDBOX_EXAMPLE_TEMPLATE_ID")
     keep_resources = env_enabled("SANDBOX_EXAMPLE_KEEP_RESOURCES")
     if looks_like_base_template(template_id):
@@ -37,7 +37,7 @@ def main() -> None:
         python_context = sandbox.create_code_context(
             language="python",
             cwd="/workspace",
-            timeout=30,
+            timeout_ms=30_000,
         )
         sandbox.run_code("name = 'python-sdk'", context=python_context)
         python_isolated = sandbox.run_code("name.upper()", context=python_context)
@@ -46,7 +46,7 @@ def main() -> None:
         bash_context = sandbox.create_code_context(
             language="bash",
             cwd="/workspace",
-            timeout=10,
+            timeout_ms=10_000,
         )
         bash_run = sandbox.run_code("pwd && echo bash-ok", context=bash_context)
         print("bash profile output:", bash_run.logs.stdout)

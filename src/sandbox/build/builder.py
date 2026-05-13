@@ -83,10 +83,6 @@ class TemplateBuildBuilder:
         self._request["readyCmd"] = command
         return self
 
-    def files_hash(self, files_hash: str) -> "TemplateBuildBuilder":
-        self._request["filesHash"] = files_hash
-        return self
-
     def to_request(self) -> dict[str, Any]:
         request = dict(self._request)
         request["steps"] = [dict(step, args=list(step.get("args") or [])) for step in self._request.get("steps", [])]

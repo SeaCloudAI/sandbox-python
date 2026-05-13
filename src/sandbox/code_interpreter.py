@@ -75,7 +75,7 @@ class CodeContext:
     context_id: str = field(default_factory=lambda: str(uuid.uuid4()))
     cwd: str | None = None
     language: str = "python"
-    timeout: int | None = None
+    timeout_ms: int | None = None
 
     @property
     def contextId(self) -> str:
@@ -93,7 +93,7 @@ def run_code_with_runtime(
     *,
     language: str | None = None,
     cwd: str | None = None,
-    timeout: int | None = None,
+    timeout_ms: int | None = None,
     envs: Mapping[str, str] | None = None,
     on_stdout: Callable[[CodeOutputChunk], None] | None = None,
     on_stderr: Callable[[CodeOutputChunk], None] | None = None,
@@ -125,7 +125,7 @@ def run_code_with_runtime(
 
     stream = runtime.start({
         "process": process,
-        "timeout": timeout,
+        "timeoutMs": _normalize_execution_timeout_ms(timeout_ms),
     })
 
     cmd_id = ""
@@ -221,7 +221,7 @@ class PythonCodeContextManager:
                     context_id="default",
                     cwd=options.get("cwd"),
                     language=options.get("language") or "python",
-                    timeout=options.get("timeout"),
+                    timeout_ms=options.get("timeout_ms"),
                 ),
                 default_context=True,
             )
@@ -232,12 +232,12 @@ class PythonCodeContextManager:
         *,
         cwd: str | None = None,
         language: str | None = None,
-        timeout: int | None = None,
+        timeout_ms: int | None = None,
     ) -> CodeContext:
         context = CodeContext(
             cwd=cwd,
             language=_normalize_language(language),
-            timeout=timeout,
+            timeout_ms=timeout_ms,
         )
         if not is_python_language(context.language):
             raise ConfigurationError("code contexts currently support python only")
@@ -309,7 +309,7 @@ class _PythonCodeContextSession:
             "input": {"stdin": _encode_stream_data(json.dumps({
                 "code": base64.b64encode(code.encode("utf-8")).decode("ascii"),
                 "cwd": options.get("cwd") or self.context.cwd,
-                "timeout": options.get("timeout") or self.context.timeout,
+                "timeoutMs": options.get("timeout_ms") or self.context.timeout_ms,
             }) + "\n")},
         })
 
@@ -370,7 +370,7 @@ class _PythonCodeContextSession:
         self._stream = self._runtime.start({
             "process": process,
             "stdin": True,
-            "timeout": self.context.timeout,
+            "timeoutMs": _normalize_execution_timeout_ms(self.context.timeout_ms),
         })
         while True:
             frame = self._stream.next()
@@ -541,6 +541,15 @@ def _decode_stream_data(value: Any) -> str:
     if not value:
         return ""
     return base64.b64decode(str(value)).decode("utf-8")
+
+
+def _normalize_execution_timeout_ms(timeout_ms: int | None) -> int | None:
+    if timeout_ms is None:
+        return None
+    timeout_value = int(timeout_ms)
+    if timeout_value <= 0:
+        raise ConfigurationError("timeout_ms must be a positive integer")
+    return timeout_value
 
 
 def _encode_stream_data(data: str) -> str:
