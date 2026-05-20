@@ -1028,6 +1028,9 @@ class FacadeTemplateTest(unittest.TestCase):
             "demo:v1",
             tags=["v1", "latest"],
             base_template_id="tpl-base-1",
+            envs={"NODE_ENV": "production"},
+            volume_mounts=[{"name": "workspace", "path": "/agent-workspace", "storageType": "nfs", "nfsHostPath": "/mnt/prod-sandbox-nfs-filesystem01"}],
+            workdir="/agent-workspace",
             cpu_count=2,
             memory_mb=1024,
             poll_interval=0.0,
@@ -1040,7 +1043,12 @@ class FacadeTemplateTest(unittest.TestCase):
             "tags": ["v1", "latest"],
             "cpuCount": 2,
             "memoryMB": 1024,
-            "extensions": {"baseTemplateID": "tpl-base-1"},
+            "extensions": {
+                "baseTemplateID": "tpl-base-1",
+                "envs": {"NODE_ENV": "production"},
+                "volumeMounts": [{"name": "workspace", "path": "/agent-workspace", "storageType": "nfs", "nfsHostPath": "/mnt/prod-sandbox-nfs-filesystem01"}],
+                "workdir": "/agent-workspace",
+            },
         })
         self.assertEqual(calls[3][1].logs_offset, 0)
         self.assertEqual(calls[3][1].limit, 100)

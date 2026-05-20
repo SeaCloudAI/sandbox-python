@@ -334,12 +334,27 @@ class BuildService(BaseTransport):
     def _validate_template_extensions(self, extensions) -> None:
         if not isinstance(extensions, dict):
             raise ValidationError("extensions must be an object")
-        allowed = {"baseTemplateID", "visibility", "envs", "storageType", "storageSizeGB", "volumeMounts"}
+        allowed = {"baseTemplateID", "visibility", "envs", "volumeMounts", "workdir"}
         for key in extensions.keys():
             if key not in allowed:
                 raise ValidationError(f"template extension field {key} is not supported by the public SDK")
         if str(extensions.get("visibility", "")).strip() == "official":
             raise ValidationError("extensions.visibility=official is not supported by the public SDK")
+        if "workdir" in extensions and not str(extensions.get("workdir", "")).strip().startswith("/"):
+            raise ValidationError("extensions.workdir must be an absolute path")
+        if "volumeMounts" in extensions:
+            mounts = extensions.get("volumeMounts")
+            if not isinstance(mounts, list):
+                raise ValidationError("extensions.volumeMounts must be an array")
+            for index, mount in enumerate(mounts):
+                if not isinstance(mount, dict):
+                    raise ValidationError(f"extensions.volumeMounts[{index}] must be an object")
+                if not str(mount.get("name", "")).strip() or not str(mount.get("path", "")).strip():
+                    raise ValidationError(f"extensions.volumeMounts[{index}] requires name and path")
+                if not str(mount.get("path", "")).strip().startswith("/"):
+                    raise ValidationError(f"extensions.volumeMounts[{index}].path must be an absolute path")
+                if not str(mount.get("storageType", "")).strip():
+                    raise ValidationError(f"extensions.volumeMounts[{index}].storageType is required")
 
     def _validate_build_status_params(self, params: BuildStatusParams | None) -> None:
         if params is None:

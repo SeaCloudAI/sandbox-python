@@ -4,6 +4,18 @@ All notable changes to this project will be documented in this file.
 
 This project follows Semantic Versioning for public SDK APIs.
 
+## [0.3.1] - 2026-05-20
+
+### Added
+
+- Added template mount/workdir options to high-level `Template.build(...)`.
+- Added sandbox metrics helpers and typed volume mount fields.
+
+### Changed
+
+- Aligned public template creation with the current backend protocol: storage is now declared per `volumeMounts[]` entry, and `workdir` is separate from mount paths.
+- Updated README examples for NFS-backed local-code template builds.
+
 ## [0.3.0] - 2026-05-13
 
 ### Added

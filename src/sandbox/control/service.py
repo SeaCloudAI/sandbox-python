@@ -6,7 +6,7 @@ from urllib.parse import quote, urlencode
 
 from ..core.transport import BaseTransport
 from ..core.exceptions import ValidationError
-from .models import ConnectSandboxResponse, ListSandboxesParams, SandboxLogsParams
+from .models import ConnectSandboxResponse, ListSandboxesParams, SandboxLogsParams, SandboxMetricsParams
 
 
 class ControlService(BaseTransport):
@@ -34,6 +34,22 @@ class ControlService(BaseTransport):
     def get_sandbox(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> dict[str, Any]:
         self._require_sandbox_id(sandbox_id)
         return self._request_json("GET", f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}", request_timeout_ms=request_timeout_ms)
+
+    def get_sandbox_metrics(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> dict[str, Any]:
+        self._require_sandbox_id(sandbox_id)
+        return self._request_json(
+            "GET",
+            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/metrics",
+            request_timeout_ms=request_timeout_ms,
+        )
+
+    def list_sandbox_metrics(
+        self,
+        params: SandboxMetricsParams | None = None,
+        request_timeout_ms: int | None = None,
+    ) -> dict[str, Any]:
+        path = self._with_query("/api/v1/sandboxes/metrics", self._encode_metrics_params(params))
+        return self._request_json("GET", path, request_timeout_ms=request_timeout_ms)
 
     def delete_sandbox(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> None:
         self._require_sandbox_id(sandbox_id)
@@ -224,6 +240,17 @@ class ControlService(BaseTransport):
             query["limit"] = str(params.limit)
         if params.next_token:
             query["nextToken"] = params.next_token
+        return query
+
+    def _encode_metrics_params(self, params: SandboxMetricsParams | None) -> dict[str, str]:
+        if params is None:
+            return {}
+        query: dict[str, str] = {}
+        ids = [item.strip() for item in (params.sandbox_ids or []) if item.strip()]
+        if ids:
+            query["sandbox_ids"] = ",".join(ids)
+        if params.limit is not None:
+            query["limit"] = str(params.limit)
         return query
 
     def _encode_logs_params(self, params: SandboxLogsParams | None) -> dict[str, str]:

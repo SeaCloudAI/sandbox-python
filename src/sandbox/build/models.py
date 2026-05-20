@@ -4,18 +4,29 @@ from dataclasses import dataclass
 from typing import TypedDict
 
 
-class TemplateVolumeMount(TypedDict):
+class TemplateVolumeMount(TypedDict, total=False):
     name: str
     path: str
+    storageType: str
+    hostPath: str
+    nfsHostPath: str
+    storageClass: str
+    storageSizeGB: int
+    persistentVolumeClaim: str
+    emptyDirSizeLimit: str
+    emptyDirMedium: str
+    objectBucket: str
+    objectKeyPrefix: str
+    readOnly: bool
+    subPath: str
 
 
 class PublicTemplateExtensions(TypedDict, total=False):
     baseTemplateID: str
     visibility: str
     envs: dict[str, str]
-    storageType: str
-    storageSizeGB: int
     volumeMounts: list[TemplateVolumeMount]
+    workdir: str
 
 
 class TemplateCreateRequest(TypedDict, total=False):

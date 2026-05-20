@@ -353,8 +353,18 @@ class BuildServiceUnitTest(unittest.TestCase):
         accepting_update = MockBuildService(lambda request: FakeResponse(200, json.dumps({"names": ["user/demo"]})))
         accepting_create.create_template({
             "name": "demo",
-            "extensions": {"baseTemplateID": "tpl-base-1", "visibility": "team", "volumeMounts": [{"name": "cache", "path": "/cache"}]},
+            "extensions": {"baseTemplateID": "tpl-base-1", "visibility": "team", "workdir": "/cache", "volumeMounts": [{"name": "cache", "path": "/cache", "storageType": "ephemeral"}]},
         })
+        with self.assertRaisesRegex(ValidationError, "template extension field storageType is not supported by the public SDK"):
+            service.create_template({
+                "name": "demo",
+                "extensions": {"storageType": "nfs"},
+            })
+        with self.assertRaisesRegex(ValidationError, r"extensions\.volumeMounts\[0\]\.storageType is required"):
+            service.create_template({
+                "name": "demo",
+                "extensions": {"volumeMounts": [{"name": "cache", "path": "/cache"}]},
+            })
         with self.assertRaisesRegex(ValidationError, "extensions.visibility=official is not supported by the public SDK"):
             service.create_template({
                 "name": "demo",

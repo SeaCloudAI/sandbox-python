@@ -431,6 +431,10 @@ class Template:
         *,
         tags: list[str] | None = None,
         base_template_id: str | None = None,
+        visibility: str | None = None,
+        envs: dict[str, str] | None = None,
+        volume_mounts: list[dict[str, Any]] | None = None,
+        workdir: str | None = None,
         cpu_count: int | None = None,
         memory_mb: int | None = None,
         wait: bool = True,
@@ -445,10 +449,15 @@ class Template:
             "cpuCount": cpu_count,
             "memoryMB": memory_mb,
         }
-        if base_template_id is not None and base_template_id.strip():
-            create_body["extensions"] = {
-                "baseTemplateID": base_template_id.strip(),
-            }
+        extensions = _build_create_template_extensions(
+            base_template_id=base_template_id,
+            visibility=visibility,
+            envs=envs,
+            volume_mounts=volume_mounts,
+            workdir=workdir,
+        )
+        if extensions:
+            create_body["extensions"] = extensions
         created = service.create_template(_drop_none(create_body))
         build_id = f"build-{int(time.time() * 1000):x}"
         request = _resolve_template_request(
@@ -567,6 +576,10 @@ def _build_with_service(
     *,
     tags: list[str] | None = None,
     base_template_id: str | None = None,
+    visibility: str | None = None,
+    envs: dict[str, str] | None = None,
+    volume_mounts: list[dict[str, Any]] | None = None,
+    workdir: str | None = None,
     cpu_count: int | None = None,
     memory_mb: int | None = None,
     wait: bool = True,
@@ -578,6 +591,10 @@ def _build_with_service(
         name,
         tags=tags,
         base_template_id=base_template_id,
+        visibility=visibility,
+        envs=envs,
+        volume_mounts=volume_mounts,
+        workdir=workdir,
         cpu_count=cpu_count,
         memory_mb=memory_mb,
         wait=wait,
@@ -1278,6 +1295,28 @@ def _parse_timestamp(value: Any) -> float:
 
 def _normalize_log_level(level: str) -> str:
     return level if level in _LOG_LEVEL_ORDER else "info"
+
+
+def _build_create_template_extensions(
+    *,
+    base_template_id: str | None = None,
+    visibility: str | None = None,
+    envs: dict[str, str] | None = None,
+    volume_mounts: list[dict[str, Any]] | None = None,
+    workdir: str | None = None,
+) -> dict[str, Any]:
+    extensions: dict[str, Any] = {}
+    if base_template_id is not None and base_template_id.strip():
+        extensions["baseTemplateID"] = base_template_id.strip()
+    if visibility is not None and visibility.strip():
+        extensions["visibility"] = visibility.strip()
+    if envs:
+        extensions["envs"] = dict(envs)
+    if volume_mounts:
+        extensions["volumeMounts"] = [dict(mount) for mount in volume_mounts]
+    if workdir is not None and workdir.strip():
+        extensions["workdir"] = workdir.strip()
+    return extensions
 
 
 def _drop_none(body: Mapping[str, Any]) -> dict[str, Any]:

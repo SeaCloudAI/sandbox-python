@@ -11,7 +11,7 @@ from sandbox import Template
 from sandbox._client import GatewayClient
 from sandbox.cmd import CmdRequestOptions, CommandService, DownloadRequest, UploadBytesRequest
 import sandbox.cmd.service as cmd_service_module
-from sandbox.control import SandboxLogsParams
+from sandbox.control import SandboxLogsParams, SandboxMetricsParams
 from sandbox.core import APIError, NotFoundError, RequestTimeoutError, ValidationError
 
 
@@ -293,6 +293,69 @@ class GatewayClientUnitTest(unittest.TestCase):
         )
         self.assertEqual(refresh_without_body[0], "POST")
 
+    def test_sandbox_metrics_endpoints(self) -> None:
+        seen: list[str] = []
+
+        def handler(request):
+            seen.append(request.full_url)
+            if request.full_url.endswith("/api/v1/sandboxes/sb-1/metrics"):
+                return FakeResponse(200, json.dumps({
+                    "sandboxID": "sb-1",
+                    "collectedAt": "2026-05-20T00:00:00Z",
+                    "cpuCount": 2,
+                    "cpuUsedPct": 12.5,
+                    "load1": 0.4,
+                    "cpuUserRate": 0.2,
+                    "memTotal": 2147483648,
+                    "memUsed": 1073741824,
+                    "memTotalMiB": 2048,
+                    "memUsedMiB": 1024,
+                    "memCache": 128,
+                    "memoryUsagePercent": 50,
+                    "diskUsed": 1024,
+                    "diskTotal": 2048,
+                    "diskReadBytesPerSecond": 4096,
+                    "netRxBytes": 10,
+                    "netTxBytes": 20,
+                    "networkRecvBytesPerSecond": 100,
+                    "taskCurrent": 3,
+                }))
+            if "/api/v1/sandboxes/metrics?" in request.full_url:
+                self.assertIn("sandbox_ids=sb-1%2Csb-2", request.full_url)
+                self.assertIn("limit=2", request.full_url)
+                return FakeResponse(200, json.dumps({
+                    "collectedAt": "2026-05-20T00:00:00Z",
+                    "items": [{
+                        "sandboxID": "sb-1",
+                        "collectedAt": "2026-05-20T00:00:00Z",
+                        "cpuCount": 2,
+                        "cpuUsedPct": 12.5,
+                        "memTotal": 1,
+                        "memUsed": 1,
+                        "memTotalMiB": 1,
+                        "memUsedMiB": 1,
+                        "memCache": 0,
+                        "diskUsed": 1,
+                        "diskTotal": 1,
+                        "netRxBytes": 1,
+                        "netTxBytes": 1,
+                    }],
+                    "sandboxes": {},
+                }))
+            self.fail(f"unexpected request: {request.full_url}")
+
+        client = MockGatewayClient(handler)
+        single = client.get_sandbox_metrics("sb-1")
+        batch = client.list_sandbox_metrics(SandboxMetricsParams(sandbox_ids=["sb-1", " ", "sb-2"], limit=2))
+
+        self.assertEqual(single["load1"], 0.4)
+        self.assertEqual(single["memoryUsagePercent"], 50)
+        self.assertEqual(single["diskReadBytesPerSecond"], 4096)
+        self.assertEqual(single["networkRecvBytesPerSecond"], 100)
+        self.assertEqual(single["taskCurrent"], 3)
+        self.assertEqual(batch["items"][0]["sandboxID"], "sb-1")
+        self.assertEqual(len(seen), 2)
+
     def test_admin_control_endpoints(self) -> None:
         calls: list[tuple[str, str, dict[str, Any] | None]] = []
 
@@ -347,6 +410,22 @@ class GatewayClientUnitTest(unittest.TestCase):
                 }))
             if request.full_url.endswith("/logs"):
                 return FakeResponse(200, json.dumps({"logs": []}))
+            if request.full_url.endswith("/metrics"):
+                return FakeResponse(200, json.dumps({
+                    "sandboxID": "sb-1",
+                    "collectedAt": "2026-05-20T00:00:00Z",
+                    "cpuCount": 1,
+                    "cpuUsedPct": 1,
+                    "memTotal": 1,
+                    "memUsed": 1,
+                    "memTotalMiB": 1,
+                    "memUsedMiB": 1,
+                    "memCache": 0,
+                    "diskUsed": 1,
+                    "diskTotal": 1,
+                    "netRxBytes": 1,
+                    "netTxBytes": 1,
+                }))
             return FakeResponse(200, json.dumps({
                 "sandboxID": "sb-1",
                 "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
@@ -357,10 +436,13 @@ class GatewayClientUnitTest(unittest.TestCase):
         sandbox = client.create_sandbox({"templateID": "tpl"})
         detail = sandbox.reload()
         sandbox.logs()
+        metrics = sandbox.metrics()
 
         self.assertEqual(detail["sandboxID"], "sb-1")
+        self.assertEqual(metrics["sandboxID"], "sb-1")
         self.assertTrue(seen[1].endswith("/api/v1/sandboxes/sb-1"))
         self.assertTrue(seen[2].endswith("/api/v1/sandboxes/sb-1/logs"))
+        self.assertTrue(seen[3].endswith("/api/v1/sandboxes/sb-1/metrics"))
 
     def test_high_level_client_helpers_reuse_stored_gateway_config(self) -> None:
         calls: list[tuple[str, str, dict[str, Any] | None]] = []

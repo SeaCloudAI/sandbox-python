@@ -37,6 +37,9 @@ class SandboxInstance(dict[str, Any]):
     def logs(self, params: SandboxLogsParams | None = None) -> dict[str, Any]:
         return self._client.get_sandbox_logs(str(self["sandboxID"]), params)
 
+    def metrics(self) -> dict[str, Any]:
+        return self._client.get_sandbox_metrics(str(self["sandboxID"]))
+
     def pause(self) -> bool:
         if str(self.get("state") or self.get("status") or "").lower() == "paused":
             return False

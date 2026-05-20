@@ -22,6 +22,12 @@ class SandboxLogsParams:
 
 
 @dataclass
+class SandboxMetricsParams:
+    sandbox_ids: list[str] | None = None
+    limit: int | None = None
+
+
+@dataclass
 class ConnectSandboxResponse:
     status_code: int
     sandbox: dict[str, Any]
