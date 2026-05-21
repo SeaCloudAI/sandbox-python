@@ -1103,7 +1103,9 @@ def _resolve_template_request(
                 upload_url = str(response.get("url") or "").strip()
                 if not upload_url:
                     raise ValidationError(f"build file upload URL is missing for hash {files_hash}")
-                _upload_build_file(upload_url, tar_bytes, timeout=timeout)
+                max_context_bytes = _parse_max_context_bytes(response.get("maxContextBytes"))
+                _validate_build_context_size(len(tar_bytes), max_context_bytes)
+                _upload_build_file(upload_url, tar_bytes, max_context_bytes=max_context_bytes, timeout=timeout)
             uploaded.add(files_hash)
         step["filesHash"] = files_hash
     resolved = dict(request)
@@ -1229,12 +1231,46 @@ def _ensure_trailing_slash(value: str) -> str:
     return value if value.endswith("/") else f"{value}/"
 
 
-def _upload_build_file(upload_url: str, data: bytes, *, timeout: float) -> None:
-    request = Request(upload_url, data=data, headers={"Content-Type": "application/x-tar"}, method="PUT")
+def _upload_build_file(upload_url: str, data: bytes, *, max_context_bytes: int, timeout: float) -> None:
+    headers = {"Content-Type": "application/x-tar"}
+    if max_context_bytes > 0:
+        headers["x-goog-content-length-range"] = f"0,{max_context_bytes}"
+    request = Request(upload_url, data=data, headers=headers, method="PUT")
     with urlopen(request, timeout=timeout) as response:
         status_code = getattr(response, "status", response.getcode())
         if status_code < 200 or status_code >= 300:
             raise ValidationError(f"build file upload failed with status {status_code}")
+
+
+def _parse_max_context_bytes(value: Any) -> int:
+    if value is None:
+        return 0
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return parsed if parsed > 0 else 0
+
+
+def _validate_build_context_size(size_bytes: int, max_context_bytes: int) -> None:
+    if max_context_bytes <= 0 or size_bytes <= max_context_bytes:
+        return
+    raise ValidationError(
+        f"build context archive size {_format_byte_size(size_bytes)} exceeds limit {_format_byte_size(max_context_bytes)}"
+    )
+
+
+def _format_byte_size(size_bytes: int) -> str:
+    if size_bytes < 1024:
+        return f"{size_bytes}B"
+    value = float(size_bytes)
+    unit = "B"
+    for candidate in ("KiB", "MiB", "GiB", "TiB"):
+        value /= 1024
+        unit = candidate
+        if value < 1024:
+            break
+    return f"{value:.1f}{unit}"
 
 
 def _parse_template_name(name: str) -> tuple[str, list[str]]:

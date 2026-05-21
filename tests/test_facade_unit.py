@@ -1368,7 +1368,7 @@ class FacadeTemplateTest(unittest.TestCase):
 
     def test_template_build_auto_uploads_local_copy_sources(self) -> None:
         calls: list[tuple[str, object]] = []
-        uploads: list[tuple[str, bytes]] = []
+        uploads: list[tuple[str, bytes, str | None]] = []
 
         class MockUploadResponse:
             status = 200
@@ -1391,7 +1391,7 @@ class FacadeTemplateTest(unittest.TestCase):
 
             def get_build_file(self, template_id, files_hash):
                 calls.append(("get_build_file", {"template_id": template_id, "files_hash": files_hash}))
-                return {"present": False, "url": f"https://upload.example/{files_hash}"}
+                return {"present": False, "url": f"https://upload.example/{files_hash}", "maxContextBytes": 104857600}
 
             def create_build(self, template_id, build_id, body):
                 calls.append(("create_build", body))
@@ -1407,7 +1407,7 @@ class FacadeTemplateTest(unittest.TestCase):
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
         def fake_urlopen(request, timeout=30.0):
-            uploads.append((request.full_url, request.data))
+            uploads.append((request.full_url, request.data, request.headers.get("X-goog-content-length-range")))
             return MockUploadResponse()
 
         original_service = template_module.BuildService
@@ -1432,6 +1432,7 @@ class FacadeTemplateTest(unittest.TestCase):
         self.assertEqual(len(uploads), 1)
         self.assertTrue(uploads[0][0].startswith("https://upload.example/"))
         self.assertEqual(uploads[0][1][:2], b"\x1f\x8b")
+        self.assertEqual(uploads[0][2], "0,104857600")
         create_build_body = calls[1][1]
         self.assertRegex(create_build_body["steps"][0]["filesHash"], r"^[a-f0-9]{64}$")
         self.assertEqual(create_build_body["steps"][0]["args"][0], "hello.txt")

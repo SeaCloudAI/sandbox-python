@@ -235,6 +235,8 @@ Template() \
 
 The first argument is a local path on your machine. The second argument is the destination path inside the template filesystem. `force_upload=True` is useful during development when the local files change frequently and you want the SDK to re-upload them instead of reusing a cached content hash.
 
+Template build contexts are packed as `tar.gz` archives and must fit the server-side `maxContextBytes` limit returned by the build file handshake. The SDK validates the archive size before upload and sends the required GCS content-length-range header.
+
 ### 7. Build Your Own Template From Local Code
 
 This uploads a local directory into the build context with `copy(...)`, builds a reusable template image, and sets a startup command for future sandboxes created from that template.
