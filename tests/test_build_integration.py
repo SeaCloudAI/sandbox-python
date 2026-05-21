@@ -55,9 +55,7 @@ class BuildPlaneIntegrationTest(unittest.TestCase):
             self.assertEqual(detail["templateID"], template_id)
             self.assertIsInstance(detail.get("builds", []), list)
 
-            updated = self.service.update_template(template_id, {
-                "extensions": {"envs": {"SDK_TEST": "1"}},
-            })
+            updated = self.service.update_template(template_id, {"public": False})
             self.assertTrue(updated["names"])
 
             file_resp = self.service.get_build_file(template_id, "a" * 64)
