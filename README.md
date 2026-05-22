@@ -17,8 +17,6 @@ Run code, agent workflows, and lightweight services in isolated cloud sandboxes 
 pip install seacloud-sandbox
 ```
 
-If you previously installed `0.1.2`, upgrade to `0.1.3` or later. `0.1.2` shipped without the `sandbox.build` package in the published artifact.
-
 ## Configure
 
 Use environment variables for gateway configuration in all examples and quick starts:
@@ -464,7 +462,7 @@ Low-level submodules remain available when you need direct request/response mode
 The SDK exposes two different metrics surfaces:
 
 - **Control-plane sandbox metrics** use Atlas through the gateway. Prefer these for dashboards and fleet monitoring because they can include Grafana/Kata enriched fields such as load average, CPU breakdown, memory pressure, disk I/O, network throughput, and task counts.
-- **Runtime metrics** call the sandbox nano-executor `/metrics` endpoint through `envdUrl`. Use these when you are already connected to one runtime and only need the raw in-sandbox snapshot. The runtime payload currently focuses on CPU, memory, and disk fields; network and disk-rate fields are available from the control-plane metrics surface.
+- **Runtime metrics** call the sandbox nano-executor `/metrics` endpoint through `envdUrl`. Use these when you are already connected to one runtime and only need the raw in-sandbox snapshot. The runtime payload includes CPU, memory, disk, and cumulative network byte counters; derived rates and enriched Grafana/Kata fields are available from the control-plane metrics surface.
 
 Control-plane metrics:
 
@@ -504,6 +502,7 @@ runtime_metrics = sandbox.get_metrics()
 print(runtime_metrics["cpu_used_pct"])
 print(runtime_metrics["mem_used_mib"], runtime_metrics["mem_total_mib"])
 print(runtime_metrics["disk_used"], runtime_metrics["disk_total"])
+print(runtime_metrics["net_rx_bytes"], runtime_metrics["net_tx_bytes"])
 ```
 
 Use `client.metrics()` or `client.build.metrics()` only when you need the Prometheus text output for the gateway services themselves. Those service metrics are not per-sandbox runtime metrics.
