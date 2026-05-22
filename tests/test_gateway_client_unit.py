@@ -241,6 +241,41 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertEqual(events[1]["request_id"], events[0]["request_id"])
         self.assertFalse(any("unit-auth-value" in json.dumps(event) for event in events))
 
+    def test_diagnostic_logger_failures_do_not_affect_requests(self) -> None:
+        class LoggingGatewayClient(GatewayClient):
+            def open(client_self, request, *, request_timeout_ms=None):
+                return FakeResponse(200, "[]")
+
+        client = LoggingGatewayClient(
+            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            api_key="unit-auth-value",
+            logger=lambda event: (_ for _ in ()).throw(RuntimeError("logger failed")),
+        )
+
+        self.assertEqual(client.list_sandboxes(), [])
+
+    def test_diagnostic_network_errors_redact_embedded_urls(self) -> None:
+        events: list[dict[str, Any]] = []
+
+        class FailingGatewayClient(GatewayClient):
+            def open(client_self, request, *, request_timeout_ms=None):
+                raise RuntimeError(
+                    "Get https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes?signature=secret-token failed",
+                )
+
+        client = FailingGatewayClient(
+            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            api_key="unit-auth-value",
+            logger=lambda event: events.append(dict(event)),
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "secret-token"):
+            client.list_sandboxes()
+
+        error_event = next(event for event in events if event["type"] == "error")
+        self.assertNotIn("secret-token", error_event["error"])
+        self.assertIn("signature=%3Credacted%3E", error_event["error"])
+
     def test_cmd_logger_redacts_signed_query_parameters(self) -> None:
         events: list[dict[str, Any]] = []
         original_urlopen = cmd_service_module.urlopen

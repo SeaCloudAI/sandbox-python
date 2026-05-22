@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import gzip
 import json
+import re
 import socket
 import ssl
 import sys
@@ -568,7 +569,7 @@ class CommandService:
                     "type": "error",
                     **event_base,
                     "duration_ms": _duration_ms(started),
-                    "error": str(exc),
+                    "error": _sanitize_diagnostic_error(str(exc)),
                 })
                 raise
         else:
@@ -597,14 +598,18 @@ class CommandService:
             "request_id": error.request_id or event_base.get("request_id", ""),
             "status": error.status_code,
             "duration_ms": _duration_ms(started),
-            "error": str(error),
+            "error": _sanitize_diagnostic_error(str(error)),
             "error_kind": error.kind,
             "retryable": error.retryable,
         })
 
     def _emit_diagnostic(self, event: Mapping[str, Any]) -> None:
         if self.logger is not None:
-            self.logger(event)
+            try:
+                self.logger(event)
+            except Exception:
+                # Diagnostics must never change request behavior.
+                pass
             return
         if self.debug:
             parts = [f"{key}={value}" for key, value in event.items() if value is not None and value != ""]
@@ -730,6 +735,16 @@ def _sanitize_diagnostic_path(value: str) -> str:
             pairs.append((key, item_value))
     query = urlencode(pairs)
     return urlunsplit(("", "", parsed.path or "/", query, ""))
+
+
+def _sanitize_diagnostic_error(value: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        try:
+            return _sanitize_diagnostic_path(match.group(0))
+        except Exception:
+            return "<redacted-url>"
+
+    return re.sub(r"https?://[^\s\"'<>]+", replace, value)
 
 
 def _is_sensitive_query_key(key: str) -> bool:
