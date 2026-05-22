@@ -7,6 +7,7 @@ from .code_interpreter import (
     CodeOutputChunk,
 )
 from .facade import Sandbox
+from .core import SDKLogger
 from .runtime import Runtime
 from .sandbox import SandboxInstance
 from .template import (
@@ -35,6 +36,7 @@ __all__ = [
     "LogEntryStart",
     "ReadyCmd",
     "Runtime",
+    "SDKLogger",
     "Sandbox",
     "SandboxInstance",
     "Template",

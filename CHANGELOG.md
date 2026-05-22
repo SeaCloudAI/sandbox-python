@@ -6,6 +6,10 @@ This project follows Semantic Versioning for public SDK APIs.
 
 ## [0.3.2] - 2026-05-22
 
+### Added
+
+- Added opt-in sanitized SDK diagnostics with per-request `X-Request-ID` generation for control, build, and runtime CMD calls.
+
 ### Changed
 
 - Documented E2B-style template tags as build-version pointers, including `default`, `template:tag`, and `template:buildID` usage.

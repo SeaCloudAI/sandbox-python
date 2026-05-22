@@ -11,7 +11,7 @@ from sandbox import Template
 from sandbox._client import GatewayClient
 from sandbox.cmd import CmdRequestOptions, CommandService, DownloadRequest, UploadBytesRequest
 import sandbox.cmd.service as cmd_service_module
-from sandbox.control import SandboxLogsParams, SandboxMetricsParams
+from sandbox.control import ListSandboxesParams, SandboxLogsParams, SandboxMetricsParams
 from sandbox.core import APIError, NotFoundError, RequestTimeoutError, ValidationError
 
 
@@ -216,6 +216,60 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertIn("nextToken=MQ", seen[0])
         self.assertIn("direction=forward", seen[1])
         self.assertIn("search=health", seen[1])
+
+    def test_logger_receives_sanitized_request_lifecycle_events(self) -> None:
+        events: list[dict[str, Any]] = []
+
+        class LoggingGatewayClient(GatewayClient):
+            def open(client_self, request, *, request_timeout_ms=None):
+                self.assertIn("nextToken=secret-page", request.full_url)
+                self.assertTrue(request.get_header("X-request-id") or request.get_header("X-Request-ID"))
+                return FakeResponse(200, "[]")
+
+        client = LoggingGatewayClient(
+            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            api_key="unit-auth-value",
+            logger=lambda event: events.append(dict(event)),
+        )
+        self.assertEqual(client.list_sandboxes(ListSandboxesParams(next_token="secret-page")), [])
+
+        self.assertEqual(events[0]["type"], "request")
+        self.assertEqual(events[0]["method"], "GET")
+        self.assertEqual(events[0]["path"], "/api/v1/sandboxes?nextToken=%3Credacted%3E")
+        self.assertTrue(events[0]["request_id"])
+        self.assertEqual(events[1]["type"], "response")
+        self.assertEqual(events[1]["request_id"], events[0]["request_id"])
+        self.assertFalse(any("unit-auth-value" in json.dumps(event) for event in events))
+
+    def test_cmd_logger_redacts_signed_query_parameters(self) -> None:
+        events: list[dict[str, Any]] = []
+        original_urlopen = cmd_service_module.urlopen
+
+        def fake_urlopen(request, timeout):
+            self.assertIn("signature=signed-secret", request.full_url)
+            self.assertTrue(request.get_header("X-request-id") or request.get_header("X-Request-ID"))
+            return FakeResponse(200, "hell")
+
+        cmd_service_module.urlopen = fake_urlopen
+        try:
+            service = CommandService(
+                base_url="https://sandbox-gateway.cloud.seaart.ai",
+                access_token="unit-runtime-auth",
+                logger=lambda event: events.append(dict(event)),
+            )
+            with service.download(
+                DownloadRequest(path="~/hello.txt"),
+                CmdRequestOptions(signature="signed-secret", signature_expiration=3600),
+            ) as response:
+                self.assertEqual(response.read().decode("utf-8"), "hell")
+        finally:
+            cmd_service_module.urlopen = original_urlopen
+
+        self.assertEqual(events[0]["type"], "request")
+        self.assertNotIn("signed-secret", events[0]["path"])
+        self.assertIn("signature=%3Credacted%3E", events[0]["path"])
+        self.assertEqual(events[1]["type"], "response")
+        self.assertEqual(events[1]["request_id"], events[0]["request_id"])
 
     def test_list_returns_bound_handles(self) -> None:
         seen = []

@@ -5,7 +5,10 @@ import gzip
 import json
 import socket
 import ssl
+import sys
+import time
 import uuid
+from collections.abc import Callable
 from typing import Any, Mapping
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit, urlunsplit
@@ -44,16 +47,27 @@ _RETRYABLE_STREAM_ERROR_MARKERS = (
     "remote end closed connection without response",
     "server disconnected",
 )
+SDKLogger = Callable[[Mapping[str, Any]], None]
 
 
 class CommandService:
-    def __init__(self, base_url: str, access_token: str = "", *, timeout: float = 30.0) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        access_token: str = "",
+        *,
+        timeout: float = 30.0,
+        debug: bool = False,
+        logger: SDKLogger | None = None,
+    ) -> None:
         normalized_base_url = base_url.strip().rstrip("/")
         if not normalized_base_url:
             raise ConfigurationError("base_url is required")
         self.base_url = normalized_base_url
         self.access_token = access_token.strip()
         self.timeout = timeout
+        self.debug = debug
+        self.logger = logger
 
     def metrics(self) -> dict[str, Any]:
         return self._request_json("GET", "/metrics")
@@ -383,6 +397,8 @@ class CommandService:
             headers["X-Access-Token"] = self.access_token
         if extra_headers:
             headers.update(extra_headers)
+        if not _get_header(headers, "X-Request-ID"):
+            headers["X-Request-ID"] = str(uuid.uuid4())
         return headers
 
     def _basic_headers(self, options: CmdRequestOptions | None = None, *, include_content_type: bool = False) -> dict[str, str]:
@@ -497,6 +513,14 @@ class CommandService:
             headers=self._build_headers(headers),
             method=method.upper(),
         )
+        request_id = request.get_header("X-request-id") or request.get_header("X-Request-ID") or ""
+        started = time.monotonic()
+        event_base = {
+            "method": method.upper(),
+            "path": _sanitize_diagnostic_path(request.full_url),
+            "request_id": request_id,
+        }
+        self._emit_diagnostic({"type": "request", **event_base})
         request_timeout = self.timeout if timeout is None else timeout
         request_timeout_ms = int(round(request_timeout * 1000))
         attempts = 2 if self._should_retry_stream_open(method, path) else 1
@@ -507,26 +531,84 @@ class CommandService:
                 break
             except HTTPError as exc:
                 if expected_statuses is None:
+                    self._emit_diagnostic({
+                        "type": "response",
+                        **event_base,
+                        "status": getattr(exc, "status", exc.code),
+                        "duration_ms": _duration_ms(started),
+                    })
                     return exc
-                raise self._decode_api_error(exc) from exc
+                api_error = self._decode_api_error(exc)
+                self._emit_api_error(event_base, api_error, started)
+                raise api_error from exc
             except TimeoutError as exc:
+                self._emit_diagnostic({
+                    "type": "error",
+                    **event_base,
+                    "duration_ms": _duration_ms(started),
+                    "error": f"request timed out after {request_timeout_ms}ms",
+                    "error_kind": "timeout",
+                    "retryable": True,
+                })
                 raise RequestTimeoutError(request_timeout_ms, cause=exc) from exc
             except socket.timeout as exc:
+                self._emit_diagnostic({
+                    "type": "error",
+                    **event_base,
+                    "duration_ms": _duration_ms(started),
+                    "error": f"request timed out after {request_timeout_ms}ms",
+                    "error_kind": "timeout",
+                    "retryable": True,
+                })
                 raise RequestTimeoutError(request_timeout_ms, cause=exc) from exc
             except (URLError, ssl.SSLError) as exc:
                 if attempt + 1 < attempts and self._is_retryable_stream_open_error(exc):
                     continue
+                self._emit_diagnostic({
+                    "type": "error",
+                    **event_base,
+                    "duration_ms": _duration_ms(started),
+                    "error": str(exc),
+                })
                 raise
         else:
             raise AssertionError("unreachable")
 
         status_code = getattr(response, "status", response.getcode())
+        self._emit_diagnostic({
+            "type": "response",
+            **event_base,
+            "status": status_code,
+            "duration_ms": _duration_ms(started),
+        })
         if expected_statuses is not None and status_code not in expected_statuses:
             try:
-                raise self._decode_api_error(response)
+                api_error = self._decode_api_error(response)
+                self._emit_api_error(event_base, api_error, started)
+                raise api_error
             finally:
                 response.close()
         return response
+
+    def _emit_api_error(self, event_base: Mapping[str, Any], error: APIError, started: float) -> None:
+        self._emit_diagnostic({
+            "type": "error",
+            **event_base,
+            "request_id": error.request_id or event_base.get("request_id", ""),
+            "status": error.status_code,
+            "duration_ms": _duration_ms(started),
+            "error": str(error),
+            "error_kind": error.kind,
+            "retryable": error.retryable,
+        })
+
+    def _emit_diagnostic(self, event: Mapping[str, Any]) -> None:
+        if self.logger is not None:
+            self.logger(event)
+            return
+        if self.debug:
+            parts = [f"{key}={value}" for key, value in event.items() if value is not None and value != ""]
+            print(f"[seacloudai-sandbox] {' '.join(parts)}", file=sys.stderr)
 
     def _decode_api_error(self, response) -> APIError:
         body = response.read().decode("utf-8")
@@ -622,3 +704,34 @@ class CommandService:
             body.extend(b"\r\n")
         body.extend(f"--{boundary}--\r\n".encode("utf-8"))
         return bytes(body), f"multipart/form-data; boundary={boundary}"
+
+
+def _get_header(headers: Mapping[str, str], name: str) -> str:
+    lowered = name.lower()
+    for key, value in headers.items():
+        if key.lower() == lowered:
+            return str(value).strip()
+    return ""
+
+
+def _duration_ms(started: float) -> int:
+    return int(round((time.monotonic() - started) * 1000))
+
+
+def _sanitize_diagnostic_path(value: str) -> str:
+    from urllib.parse import parse_qsl, urlencode
+
+    parsed = urlsplit(value)
+    pairs = []
+    for key, item_value in parse_qsl(parsed.query, keep_blank_values=True):
+        if _is_sensitive_query_key(key):
+            pairs.append((key, "<redacted>"))
+        else:
+            pairs.append((key, item_value))
+    query = urlencode(pairs)
+    return urlunsplit(("", "", parsed.path or "/", query, ""))
+
+
+def _is_sensitive_query_key(key: str) -> bool:
+    normalized = key.lower()
+    return "token" in normalized or "signature" in normalized or normalized == "api_key"

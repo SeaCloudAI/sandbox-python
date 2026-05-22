@@ -3,6 +3,10 @@ from __future__ import annotations
 import json
 import os
 import socket
+import sys
+import time
+import uuid
+from collections.abc import Callable
 from typing import Any, Mapping
 from urllib.error import HTTPError
 from urllib.parse import urljoin
@@ -12,6 +16,7 @@ from .._version import SDK_VERSION
 from .exceptions import APIError, ConfigurationError, RequestTimeoutError, create_api_error
 
 DEFAULT_BASE_URL = "https://sandbox-gateway.cloud.seaart.ai"
+SDKLogger = Callable[[Mapping[str, Any]], None]
 
 
 class BaseTransport:
@@ -26,6 +31,8 @@ class BaseTransport:
         project_id: str | None = None,
         timeout: float = 30.0,
         request_timeout_ms: int | None = None,
+        debug: bool = False,
+        logger: SDKLogger | None = None,
     ) -> None:
         normalized_base_url = _resolve_base_url(base_url=base_url, domain=domain)
         normalized_api_key = (api_key or os.getenv("SEACLOUD_API_KEY") or "").strip()
@@ -40,6 +47,8 @@ class BaseTransport:
         self.base_url = normalized_base_url
         self.timeout = resolved_timeout
         self.timeout_ms = int(round(resolved_timeout * 1000))
+        self.debug = debug
+        self.logger = logger
         self._default_headers = {
             "Accept": "application/json",
             "Authorization": f"Bearer {normalized_api_key}",
@@ -59,6 +68,8 @@ class BaseTransport:
         headers = dict(self._default_headers)
         if extra_headers:
             headers.update(extra_headers)
+        if not _get_header(headers, "X-Request-ID"):
+            headers["X-Request-ID"] = str(uuid.uuid4())
         return headers
 
     def build_request(
@@ -162,25 +173,87 @@ class BaseTransport:
         if payload is None and method.upper() in {"POST", "PUT", "PATCH"}:
             payload = b""
         request = self.build_request(method, path, headers=headers, data=payload)
+        request_id = request.get_header("X-request-id") or request.get_header("X-Request-ID") or ""
+        started = time.monotonic()
+        event_base = {
+            "method": method.upper(),
+            "path": _sanitize_diagnostic_path(request.full_url),
+            "request_id": request_id,
+        }
+        self._emit_diagnostic({"type": "request", **event_base})
         try:
             if request_timeout_ms is None:
                 response = self.open(request)
             else:
                 response = self.open(request, request_timeout_ms=request_timeout_ms)
         except HTTPError as exc:
-            raise self._decode_api_error(exc) from exc
+            api_error = self._decode_api_error(exc)
+            self._emit_api_error(event_base, api_error, started)
+            raise api_error from exc
         except TimeoutError as exc:
+            self._emit_diagnostic({
+                "type": "error",
+                **event_base,
+                "duration_ms": _duration_ms(started),
+                "error": f"request timed out after {self.timeout_ms if request_timeout_ms is None else int(request_timeout_ms)}ms",
+                "error_kind": "timeout",
+                "retryable": True,
+            })
             raise RequestTimeoutError(self.timeout_ms if request_timeout_ms is None else int(request_timeout_ms), cause=exc) from exc
         except socket.timeout as exc:
+            self._emit_diagnostic({
+                "type": "error",
+                **event_base,
+                "duration_ms": _duration_ms(started),
+                "error": f"request timed out after {self.timeout_ms if request_timeout_ms is None else int(request_timeout_ms)}ms",
+                "error_kind": "timeout",
+                "retryable": True,
+            })
             raise RequestTimeoutError(self.timeout_ms if request_timeout_ms is None else int(request_timeout_ms), cause=exc) from exc
+        except Exception as exc:
+            self._emit_diagnostic({
+                "type": "error",
+                **event_base,
+                "duration_ms": _duration_ms(started),
+                "error": str(exc),
+            })
+            raise
 
         status_code = getattr(response, "status", response.getcode())
+        self._emit_diagnostic({
+            "type": "response",
+            **event_base,
+            "status": status_code,
+            "duration_ms": _duration_ms(started),
+        })
         if status_code not in expected_statuses:
             try:
-                raise self._decode_api_error(response)
+                api_error = self._decode_api_error(response)
+                self._emit_api_error(event_base, api_error, started)
+                raise api_error
             finally:
                 response.close()
         return response
+
+    def _emit_api_error(self, event_base: Mapping[str, Any], error: APIError, started: float) -> None:
+        self._emit_diagnostic({
+            "type": "error",
+            **event_base,
+            "request_id": error.request_id or event_base.get("request_id", ""),
+            "status": error.status_code,
+            "duration_ms": _duration_ms(started),
+            "error": str(error),
+            "error_kind": error.kind,
+            "retryable": error.retryable,
+        })
+
+    def _emit_diagnostic(self, event: Mapping[str, Any]) -> None:
+        if self.logger is not None:
+            self.logger(event)
+            return
+        if self.debug:
+            parts = [f"{key}={value}" for key, value in event.items() if value is not None and value != ""]
+            print(f"[seacloudai-sandbox] {' '.join(parts)}", file=sys.stderr)
 
     def _decode_api_error(self, response) -> APIError:
         body = response.read().decode("utf-8")
@@ -223,3 +296,34 @@ def _normalize_domain(value: str) -> str:
     if value.startswith("http://") or value.startswith("https://"):
         return value.rstrip("/")
     return f"https://{value}".rstrip("/")
+
+
+def _get_header(headers: Mapping[str, str], name: str) -> str:
+    lowered = name.lower()
+    for key, value in headers.items():
+        if key.lower() == lowered:
+            return str(value).strip()
+    return ""
+
+
+def _duration_ms(started: float) -> int:
+    return int(round((time.monotonic() - started) * 1000))
+
+
+def _sanitize_diagnostic_path(value: str) -> str:
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    parsed = urlsplit(value)
+    pairs = []
+    for key, item_value in parse_qsl(parsed.query, keep_blank_values=True):
+        if _is_sensitive_query_key(key):
+            pairs.append((key, "<redacted>"))
+        else:
+            pairs.append((key, item_value))
+    query = urlencode(pairs)
+    return urlunsplit(("", "", parsed.path or "/", query, ""))
+
+
+def _is_sensitive_query_key(key: str) -> bool:
+    normalized = key.lower()
+    return "token" in normalized or "signature" in normalized or normalized == "api_key"

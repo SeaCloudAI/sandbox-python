@@ -1,4 +1,4 @@
-from .transport import BaseTransport
+from .transport import BaseTransport, SDKLogger
 from .exceptions import (
     APIError,
     AuthenticationError,
@@ -30,4 +30,5 @@ __all__ = [
     "TimeoutAPIError",
     "TransportError",
     "ValidationError",
+    "SDKLogger",
 ]

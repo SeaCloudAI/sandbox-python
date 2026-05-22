@@ -8,6 +8,7 @@ from .cmd.service import CommandService
 from .control.service import ControlService
 from .control.models import ConnectSandboxResponse, ListSandboxesParams
 from .core.exceptions import ConfigurationError
+from .core.transport import SDKLogger
 from .runtime import Runtime
 from .sandbox import SandboxInstance
 
@@ -26,6 +27,8 @@ class GatewayClient(ControlService):
         project_id: str | None = None,
         timeout: float = 30.0,
         request_timeout_ms: int | None = None,
+        debug: bool = False,
+        logger: SDKLogger | None = None,
     ) -> None:
         super().__init__(
             base_url=base_url,
@@ -34,6 +37,8 @@ class GatewayClient(ControlService):
             project_id=project_id,
             timeout=timeout,
             request_timeout_ms=request_timeout_ms,
+            debug=debug,
+            logger=logger,
         )
         self.build = BuildService(
             base_url=base_url,
@@ -42,6 +47,8 @@ class GatewayClient(ControlService):
             project_id=project_id,
             timeout=timeout,
             request_timeout_ms=request_timeout_ms,
+            debug=debug,
+            logger=logger,
         )
 
     def cmd(self, *, base_url: str, access_token: str = "", timeout: float = 30.0) -> CommandService:
@@ -78,6 +85,8 @@ class GatewayClient(ControlService):
             base_url=base_url,
             access_token=access_token,
             timeout=self.timeout if timeout is None else timeout,
+            debug=self.debug,
+            logger=self.logger,
         )
 
     def cmd_from_sandbox(
@@ -102,6 +111,8 @@ class GatewayClient(ControlService):
             base_url=base_url,
             access_token=str(sandbox.get("envdAccessToken") or ""),
             timeout=self.timeout if timeout is None else timeout,
+            debug=self.debug,
+            logger=self.logger,
         )
 
     def create(
