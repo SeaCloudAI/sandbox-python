@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 This project follows Semantic Versioning for public SDK APIs.
 
+## [0.3.2] - 2026-05-22
+
+### Changed
+
+- Documented E2B-style template tags as build-version pointers, including `default`, `template:tag`, and `template:buildID` usage.
+
 ## [0.3.1] - 2026-05-20
 
 ### Added
