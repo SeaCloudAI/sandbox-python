@@ -373,8 +373,6 @@ class BuildService(BaseTransport):
             raise ValidationError("build logs limit must be an integer between 0 and 100")
         if params.direction is not None and params.direction not in {"forward", "backward"}:
             raise ValidationError('build logs direction must be "forward" or "backward"')
-        if params.source is not None and params.source not in {"temporary", "persistent"}:
-            raise ValidationError('build logs source must be "temporary" or "persistent"')
 
     def _encode_list_templates_params(self, params: ListTemplatesParams | None) -> dict[str, Any]:
         if params is None:
@@ -422,8 +420,6 @@ class BuildService(BaseTransport):
             query["direction"] = params.direction
         if params.level:
             query["level"] = params.level
-        if params.source:
-            query["source"] = params.source
         return query
 
     def _with_query(self, path: str, params: Mapping[str, Any]) -> str:

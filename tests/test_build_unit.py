@@ -263,7 +263,7 @@ class BuildServiceUnitTest(unittest.TestCase):
                     "createdAt": "2026-01-01T00:00:00Z",
                     "updatedAt": "2026-01-01T00:00:01Z",
                 }))
-            if "source=persistent" in request.full_url and request.full_url.endswith("/logs?cursor=0&limit=10&direction=forward&source=persistent"):
+            if request.full_url.endswith("/logs?cursor=0&limit=10&direction=forward"):
                 return FakeResponse(200, json.dumps({"logs": []}))
             self.fail(f"unexpected request: {request.get_method()} {request.full_url}")
 
@@ -302,7 +302,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         history = service.list_builds("tpl-1")
         build = service.get_build("tpl-1", "build-1")
         status = service.get_build_status("tpl-1", "build-1", BuildStatusParams(logs_offset=5, limit=10))
-        logs = service.get_build_logs("tpl-1", "build-1", BuildLogsParams(cursor=0, limit=10, direction="forward", source="persistent"))
+        logs = service.get_build_logs("tpl-1", "build-1", BuildLogsParams(cursor=0, limit=10, direction="forward"))
 
         self.assertEqual(history["total"], 0)
         self.assertEqual(build["buildID"], "build-1")
@@ -387,8 +387,6 @@ class BuildServiceUnitTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             service.get_build_status("tpl-1", "build-1", BuildStatusParams(limit=101))
         with self.assertRaises(ValidationError):
-            service.get_build_logs("tpl-1", "build-1", BuildLogsParams(source="invalid"))
-        with self.assertRaises(ValidationError):
             service.get_build_file("tpl-1", "bad")
 
         def error_handler(request):
@@ -428,7 +426,7 @@ class BuildServiceUnitTest(unittest.TestCase):
                 return FakeResponse(200, json.dumps({"templateID": "tpl-1"}))
             if request.full_url.endswith("/status?logsOffset=0&limit=100"):
                 return FakeResponse(200, json.dumps({"buildID": "b", "templateID": "tpl-1", "status": "building", "logs": [], "logEntries": []}))
-            if request.full_url.endswith("/logs?cursor=0&limit=100&direction=backward&source=temporary"):
+            if request.full_url.endswith("/logs?cursor=0&limit=100&direction=backward"):
                 return FakeResponse(200, json.dumps({"logs": []}))
             if "/files/" in request.full_url:
                 return FakeResponse(200, json.dumps({"present": True}))
@@ -443,7 +441,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         service.get_template("tpl-1", GetTemplateParams(limit=100, next_token=""))
         service.create_build("tpl-1", build_id)
         service.get_build_status("tpl-1", "build-1", BuildStatusParams(logs_offset=0, limit=100))
-        service.get_build_logs("tpl-1", "build-1", BuildLogsParams(cursor=0, limit=100, direction="backward", source="temporary"))
+        service.get_build_logs("tpl-1", "build-1", BuildLogsParams(cursor=0, limit=100, direction="backward"))
         service.get_build_file("tpl-1", "a" * 64)
         self.assertEqual(len(calls), 8)
 
