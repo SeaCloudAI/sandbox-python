@@ -4,7 +4,7 @@ Run code, agent workflows, and lightweight services in isolated cloud sandboxes 
 
 ## Why SeaCloudAI Sandbox
 
-- **Cloud sandboxes without infrastructure work**: create disposable isolated runtimes without managing Kubernetes, containers, runtime tokens, or service proxies yourself.
+- **Cloud sandboxes without infrastructure work**: create disposable isolated runtimes without managing containers, runtime tokens, or service proxies yourself.
 - **One object for the full workflow**: create a sandbox, write files, run commands, open a PTY, clone git repos, expose a web service, inspect logs, and clean up from the same SDK.
 - **Official templates for fast starts**: use `base` for files, commands, git, and PTY; use `code-interpreter` for multi-language code execution; use agent templates such as `claude` or `codex` when your environment publishes them.
 - **Reusable environments**: prototype in a running sandbox, then bake stable setup into a custom `tpl-...` template that can be pinned and reused in production.
@@ -278,7 +278,7 @@ print(sandbox.get_host(3000))
 
 - `401` / `403`: verify `SEACLOUD_API_KEY` and that the process sees the environment variable.
 - Requests go to the wrong gateway: check `SEACLOUD_BASE_URL`; include the `https://` scheme.
-- Runtime APIs return `404`: use a template that starts nano-executor and returns `envdUrl` / `envdAccessToken`.
+- Runtime APIs return `404`: use a template that supports managed runtime access and returns `envdUrl` / `envdAccessToken`.
 - `waitReady` or builds time out: increase lifecycle `timeout` and SDK HTTP `request_timeout_ms` for long starts or image builds.
 - Frontend URL is unreachable: bind to `0.0.0.0`, confirm the port passed to `get_host(...)`, and inspect whether the background process exited.
 - Build with local files fails: make sure `Template.copy(...)` points to an existing local path and use `force_upload=True` while iterating.
@@ -484,7 +484,7 @@ Low-level submodules remain available when you need direct request/response mode
 The SDK exposes two different metrics surfaces:
 
 - **Control-plane sandbox metrics** use Atlas through the gateway. Prefer these for dashboards and fleet monitoring because they can include Grafana/Kata enriched fields such as load average, CPU breakdown, memory pressure, disk I/O, network throughput, and task counts.
-- **Runtime metrics** call the sandbox nano-executor `/metrics` endpoint through `envdUrl`. Use these when you are already connected to one runtime and only need the raw in-sandbox snapshot. The runtime payload includes CPU, memory, disk, and cumulative network byte counters; derived rates and enriched Grafana/Kata fields are available from the control-plane metrics surface.
+- **Runtime metrics** call the sandbox runtime `/metrics` endpoint through `envdUrl`. Use these when you are already connected to one runtime and only need the direct in-sandbox snapshot. The runtime payload includes CPU, memory, disk, and cumulative network byte counters; derived rates and enriched fields are available from the control-plane metrics surface.
 
 Control-plane metrics:
 
@@ -515,7 +515,7 @@ Control-plane snapshot fields include:
 - memory: `memTotal`, `memUsed`, `memTotalMiB`, `memUsedMiB`, `memCache`, `memoryAvailableBytes`, `memoryUsagePercent`, swap fields
 - disk: `diskUsed`, `diskTotal`, `diskReadOpsPerSecond`, `diskWriteOpsPerSecond`, `diskReadBytesPerSecond`, `diskWriteBytesPerSecond`
 - network: `netRxBytes`, `netTxBytes`, `networkRecvBytesPerSecond`, `networkSentBytesPerSecond`, packet/error/drop rates
-- tasks and raw runtime snapshot: `taskCurrent`, `taskMax`, `raw`
+- tasks: `taskCurrent`, `taskMax`
 
 Runtime metrics:
 
@@ -553,7 +553,7 @@ Template builder conveniences include:
 - supported command and path options: `run_cmd(..., user=...)`, `git_clone(..., user=...)`, `make_dir(..., user=...)`, `make_symlink(..., user=...)`, `remove(..., user=...)`, `rename(..., user=...)`
 - intentionally not exposed yet: MCP server helpers and devcontainer helpers
 
-### Build Plane Namespace
+### Build Plane Module
 
 Low-level `BuildService` from `sandbox.build` exposes:
 
@@ -562,7 +562,7 @@ Low-level `BuildService` from `sandbox.build` exposes:
 - builds: `create_build`, `get_build_file`, `rollback_template`, `list_builds`, `get_build`, `get_build_status`, `get_build_logs`
 - tags: `assign_template_tags`, `delete_template_tags`, `list_template_tags`
 
-Build logs are served by the platform Loki backend. `get_build_logs` accepts the older `source` option for compatibility, but the SDK ignores it and does not select between temporary or persistent log stores.
+Build logs are served by the platform log API. `get_build_logs` returns structured log entries without exposing the underlying log storage.
 
 The public template contract is split into three layers: E2B create fields (`name`, `tags`, `cpuCount`, `memoryMB`), Atlas extension fields under `extensions` (`baseTemplateID`, `visibility`, `envs`, `volumeMounts`, `workdir`), E2B update field `public`, and build-only fields on `create_build` (`fromImage`, `fromTemplate`, `steps`, `tags`, `startCmd`, `readyCmd`, registry credentials, `steps[].filesHash`).
 Template tags are version pointers to build artifacts. Build requests without explicit tags use `default`; `assign_template_tags("template:v1", ["stable"])` moves `stable` to the build behind `v1`, and sandboxes can reference `template:stable` or `template:buildID`.
@@ -572,13 +572,13 @@ Public create calls reject unsupported top-level write fields such as `alias` an
 
 New custom templates default to `type: "custom"`, `version: "v0.1.0"`, `cpuCount: 1`, `memoryMB: 512`, `ttlSeconds: 300`, and resource limit ratios of `1.0`. Server-generated template IDs use `tpl-{type}-{16 lowercase hex}` and server-generated initial build IDs use `build-{16 lowercase hex}`. Client-supplied build IDs passed to `create_build(template_id, build_id, ...)` must be lowercase DNS labels up to 63 characters; the SDK recommends the `build-` prefix.
 
-`create_template`, `list_templates`, and `get_template` responses include `type` and `version` when the backend returns them. Treat `type` as the stable Atlas template family and `version` as that family's version marker.
+`create_template`, `list_templates`, and `get_template` responses include `type` and `version` when the platform returns them. Treat `type` as the stable template family and `version` as that family's version marker.
 
 `create_template` rejects `visibility="official"` on public routes, including `extensions.visibility == "official"`.
 
 `create_build` now follows the E2B wire contract directly: COPY contexts are passed through `steps[].filesHash`, and the SDK returns the raw `202 {}` trigger response without adding helper fields.
 
-`fromImage` switches the template to an already-built image and does not start a Dockerfile/Kubernetes build job by itself. `fromTemplate` resolves a ready template image and uses it as the build base for supported E2B steps. `from_dockerfile` is a client-side convenience that parses a supported Dockerfile subset into `fromImage`, `steps`, `startCmd`, and `readyCmd`; it is not the platform admin raw-Dockerfile build route. Raw Dockerfile builds that produce Harbor images are an admin/internal sandbox-builder API and are intentionally not exposed by this public SDK.
+`fromImage` switches the template to an already-built image and does not start a new image build by itself. `fromTemplate` resolves a ready template image and uses it as the build base for supported E2B steps. `from_dockerfile` is a client-side convenience that parses a supported Dockerfile subset into `fromImage`, `steps`, `startCmd`, and `readyCmd`; it is not the platform admin raw-Dockerfile build route.
 
 Build records can move through `uploaded`, `waiting`, `building`, `ready`, and `error`. `uploaded` means a referenced COPY context is still missing; upload it through the file handshake and call `create_build` again with the same `build_id`.
 
@@ -592,7 +592,7 @@ Build records can move through `uploaded`, `waiting`, `building`, `ready`, and `
 - Prefer explicit cleanup with `sandbox.delete()` and `Template.delete(...)` when running probes, smoke tests, or CI.
 - For long-lived workloads, move cleanup and timeout policy into your own lifecycle manager instead of relying on sample code defaults.
 
-### Runtime Namespace
+### Runtime Module
 
 Bound sandbox runtime modules and low-level CMD services expose:
 
@@ -620,8 +620,8 @@ Useful CMD helpers:
 
 - High-level helpers always read gateway auth and endpoint from `SEACLOUD_BASE_URL` / `SEACLOUD_API_KEY`. Only low-level transport clients should be initialized with explicit `base_url` / `api_key`.
 - Runtime access should be derived from bound sandbox objects or low-level sandbox instances.
-- Low-level create/detail responses include `envdUrl` and `envdAccessToken` when nano-executor access is enabled.
-- Runtime file/process APIs require a template image that starts nano-executor and returns runtime access fields; if runtime APIs return `404`, verify the selected template supports CMD runtime routes.
+- Low-level create/detail responses include `envdUrl` and `envdAccessToken` when managed runtime access is enabled.
+- Runtime file/process APIs require a template image that supports managed runtime access; if runtime APIs return `404`, verify the selected template supports CMD runtime routes.
 - Runtime requests can override the SDK HTTP timeout per call through `CmdRequestOptions(request_timeout_ms=...)`.
 - The bound sandbox exposes `traffic_access_token` as an E2B-style alias of the runtime access token returned by the gateway.
 - `waitReady=True` can take longer than the default lifecycle wait in production; pass a larger `timeout` on sandbox create/connect flows when you need a longer ready/pause wait budget.

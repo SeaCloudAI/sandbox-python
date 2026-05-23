@@ -67,5 +67,3 @@ class BuildLogsParams:
     limit: int | None = None
     direction: str | None = None
     level: str | None = None
-    # Deprecated: build logs are Loki-only; retained for old callers and ignored.
-    source: str | None = None
