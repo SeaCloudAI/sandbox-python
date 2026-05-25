@@ -264,7 +264,14 @@ class BuildServiceUnitTest(unittest.TestCase):
                     "updatedAt": "2026-01-01T00:00:01Z",
                 }))
             if request.full_url.endswith("/logs?cursor=0&limit=10&direction=forward"):
-                return FakeResponse(200, json.dumps({"logs": []}))
+                return FakeResponse(200, json.dumps({
+                    "logs": [],
+                    "hasMore": False,
+                    "diagnostic": {
+                        "reason": "cursor_window_empty",
+                        "message": "No build logs were found from the requested cursor. Try changing direction or using an earlier cursor.",
+                    },
+                }))
             self.fail(f"unexpected request: {request.get_method()} {request.full_url}")
 
         service = MockBuildService(handler)
@@ -309,6 +316,7 @@ class BuildServiceUnitTest(unittest.TestCase):
         self.assertEqual(status["logEntries"][0]["message"], "building image")
         self.assertEqual(status["logs"], ["raw-line"])
         self.assertEqual(logs["logs"], [])
+        self.assertEqual(logs["diagnostic"]["reason"], "cursor_window_empty")
         status_with_entries = service.get_build_status("tpl-1", "build-1")
         self.assertEqual(status_with_entries["logs"], ["raw-line-2"])
         self.assertEqual(status_with_entries["logEntries"][0]["message"], "structured log")

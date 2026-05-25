@@ -273,7 +273,14 @@ class GatewayClientUnitTest(unittest.TestCase):
 
         def handler(request):
             seen.append(request.full_url)
-            return FakeResponse(200, json.dumps([] if "/sandboxes?" in request.full_url else {"logs": []}))
+            return FakeResponse(200, json.dumps([] if "/sandboxes?" in request.full_url else {
+                "logs": [],
+                "hasMore": False,
+                "diagnostic": {
+                    "reason": "filters_applied",
+                    "message": "No sandbox logs matched the current filters. Try removing search or level filters.",
+                },
+            }))
 
         client = MockGatewayClient(handler)
         client.list_sandboxes(
@@ -284,10 +291,11 @@ class GatewayClientUnitTest(unittest.TestCase):
                 "next_token": "MQ",
             })(),
         )
-        client.get_sandbox_logs(
+        logs = client.get_sandbox_logs(
             "sb-1",
             SandboxLogsParams(cursor=0, limit=10, direction="forward", level="info", search="health"),
         )
+        self.assertEqual(logs["diagnostic"]["reason"], "filters_applied")
         self.assertIn("metadata=app%3Dprod%26team%3Dcore", seen[0])
         self.assertIn("state=running", seen[0])
         self.assertIn("nextToken=MQ", seen[0])
