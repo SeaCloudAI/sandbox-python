@@ -98,6 +98,17 @@ class GatewayClientUnitTest(unittest.TestCase):
                     "sandboxes": {"status": "available"},
                     "templates": {"status": "available"},
                 },
+                "checks": [{
+                    "status": "exhausted",
+                    "scope": "user",
+                    "resource": "templates",
+                    "metric": "concurrentBuilds",
+                    "used": 3,
+                    "limit": 3,
+                    "remaining": 0,
+                    "message": "User concurrent build quota is exhausted.",
+                    "usageEndpoint": "/api/v1/usage/template-limits",
+                }],
                 "endpoints": {
                     "sandboxUsage": "/api/v1/usage/limits",
                     "templateUsage": "/api/v1/usage/template-limits",
@@ -111,6 +122,7 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertEqual(summary["status"], "ok")
         self.assertEqual(summary["projectID"], "project-1")
         self.assertEqual(summary["usage"]["templates"]["user"]["limits"]["concurrentBuilds"]["remaining"], 3)
+        self.assertEqual(summary["checks"][0]["metric"], "concurrentBuilds")
 
     def test_rate_limit_errors_expose_public_diagnostics(self) -> None:
         def handler(request):
