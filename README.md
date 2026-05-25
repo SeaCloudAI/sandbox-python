@@ -636,7 +636,7 @@ Useful CMD helpers:
 - Runtime requests can override the SDK HTTP timeout per call through `CmdRequestOptions(request_timeout_ms=...)`.
 - The bound sandbox exposes `traffic_access_token` as an E2B-style alias of the runtime access token returned by the gateway.
 - `waitReady=True` can take longer than the default lifecycle wait in production; pass a larger `timeout` on sandbox create/connect flows when you need a longer ready/pause wait budget.
-- HTTP errors are classified into typed exceptions such as `NotFoundError`, `RateLimitError`, and `ServerError`. Transport timeouts raise `RequestTimeoutError`.
+- HTTP errors are classified into typed exceptions such as `NotFoundError`, `RateLimitError`, and `ServerError`. Transport timeouts raise `RequestTimeoutError`. Quota `429` responses expose `error.details` and typed `error.usage_limit` when the gateway returns public limit diagnostics.
 - High-level `kill()` helpers send `SIGNAL_SIGKILL` and return `False` when the runtime reports a missing process through either `404` or `ESRCH`.
 - PTY handles normalize reconnect output into `pty` even when the runtime emits the bytes through `stdout` / `stderr`.
 - Runtime reconnect streams such as `connect()` and `watch_dir()` retry once on transient TLS EOF / remote-close failures before surfacing the transport error.

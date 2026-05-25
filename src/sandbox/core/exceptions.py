@@ -36,6 +36,7 @@ class APIError(SandboxError):
         code: int | None = None,
         request_id: str | None = None,
         detail: object | None = None,
+        details: object | None = None,
         body: str = "",
         kind: str | None = None,
     ) -> None:
@@ -44,6 +45,8 @@ class APIError(SandboxError):
         self.code = code
         self.request_id = request_id
         self.detail = detail
+        self.details = details
+        self.usage_limit = _usage_limit_diagnostic(details)
         self.body = body
         self.kind = kind or classify_api_error(status_code)
 
@@ -87,6 +90,7 @@ def create_api_error(
     code: int | None = None,
     request_id: str | None = None,
     detail: object | None = None,
+    details: object | None = None,
     body: str = "",
 ) -> APIError:
     kind = classify_api_error(status_code)
@@ -114,6 +118,7 @@ def create_api_error(
         code=code,
         request_id=request_id,
         detail=detail,
+        details=details,
         body=body,
         kind=kind,
     )
@@ -145,3 +150,9 @@ def _detail_message(detail: object | None) -> str:
     if isinstance(detail, str):
         return detail
     return ""
+
+
+def _usage_limit_diagnostic(details: object | None) -> dict | None:
+    if isinstance(details, dict) and details.get("reason") == "usage_limit":
+        return details
+    return None

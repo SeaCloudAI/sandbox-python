@@ -13,6 +13,7 @@ from sandbox.cmd import CmdRequestOptions, CommandService, DownloadRequest, Uplo
 import sandbox.cmd.service as cmd_service_module
 from sandbox.control import ListSandboxesParams, SandboxLogsParams, SandboxMetricsParams
 from sandbox.core import APIError, NotFoundError, RequestTimeoutError, ValidationError
+from sandbox.core import RateLimitError
 
 
 class FakeResponse:
@@ -110,6 +111,34 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertEqual(summary["status"], "ok")
         self.assertEqual(summary["projectID"], "project-1")
         self.assertEqual(summary["usage"]["templates"]["user"]["limits"]["concurrentBuilds"]["remaining"], 3)
+
+    def test_rate_limit_errors_expose_public_diagnostics(self) -> None:
+        def handler(request):
+            return FakeResponse(429, json.dumps({
+                "code": 429,
+                "message": "sandbox limit exceeded",
+                "requestID": "req-camel",
+                "details": {
+                    "reason": "usage_limit",
+                    "scope": "project",
+                    "resource": "sandboxes",
+                    "metric": "dailyCreates",
+                    "used": 101,
+                    "limit": 100,
+                    "remaining": 0,
+                    "usageEndpoint": "/api/v1/usage/limits",
+                },
+            }), reason="Too Many Requests")
+
+        client = MockGatewayClient(handler)
+        with self.assertRaises(RateLimitError) as ctx:
+            client.create_sandbox({"templateID": "tpl"})
+        self.assertEqual(ctx.exception.request_id, "req-camel")
+        self.assertEqual(ctx.exception.details["scope"], "project")
+        self.assertEqual(ctx.exception.details["metric"], "dailyCreates")
+        self.assertEqual(ctx.exception.details["usageEndpoint"], "/api/v1/usage/limits")
+        self.assertEqual(ctx.exception.usage_limit["scope"], "project")
+        self.assertEqual(ctx.exception.usage_limit["metric"], "dailyCreates")
 
     def test_sandbox_request_encoding(self) -> None:
         def handler(request):

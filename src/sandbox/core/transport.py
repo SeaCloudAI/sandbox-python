@@ -270,13 +270,15 @@ class BaseTransport:
                 parsed = None
 
         detail = parsed.get("error") if parsed else None
+        details = parsed.get("details") if parsed else None
         message = parsed.get("message") if parsed else getattr(response, "reason", "request failed")
         return create_api_error(
             message or "request failed",
             status_code=getattr(response, "status", response.getcode()),
             code=parsed.get("code") if parsed else None,
-            request_id=parsed.get("request_id") if parsed else None,
+            request_id=(parsed.get("requestID") or parsed.get("request_id")) if parsed else None,
             detail=detail,
+            details=details,
             body=body,
         )
 
