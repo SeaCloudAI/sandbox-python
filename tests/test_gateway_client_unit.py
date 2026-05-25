@@ -109,10 +109,20 @@ class GatewayClientUnitTest(unittest.TestCase):
                     "message": "User concurrent build quota is exhausted.",
                     "usageEndpoint": "/api/v1/usage/template-limits",
                 }],
+                "actions": [{
+                    "status": "limit_reached",
+                    "scope": "user",
+                    "resource": "templates",
+                    "message": "User concurrent build quota is exhausted. Review current usage before retrying.",
+                    "endpoint": "/api/v1/usage/template-limits",
+                }],
                 "endpoints": {
                     "sandboxUsage": "/api/v1/usage/limits",
                     "templateUsage": "/api/v1/usage/template-limits",
+                    "sandboxDetail": "/api/v1/sandboxes/{sandboxID}",
+                    "sandboxMetrics": "/api/v1/sandboxes/{sandboxID}/metrics",
                     "sandboxLogs": "/api/v1/sandboxes/{sandboxID}/logs",
+                    "buildStatus": "/api/v1/templates/{templateID}/builds/{buildID}/status",
                     "buildLogs": "/api/v1/templates/{templateID}/builds/{buildID}/logs",
                 },
             }))
@@ -123,6 +133,8 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertEqual(summary["projectID"], "project-1")
         self.assertEqual(summary["usage"]["templates"]["user"]["limits"]["concurrentBuilds"]["remaining"], 3)
         self.assertEqual(summary["checks"][0]["metric"], "concurrentBuilds")
+        self.assertEqual(summary["actions"][0]["status"], "limit_reached")
+        self.assertEqual(summary["endpoints"]["buildStatus"], "/api/v1/templates/{templateID}/builds/{buildID}/status")
 
     def test_rate_limit_errors_expose_public_diagnostics(self) -> None:
         def handler(request):
@@ -163,12 +175,21 @@ class GatewayClientUnitTest(unittest.TestCase):
                     "sandboxID": "sb-1",
                     "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                     "envdAccessToken": "unit-runtime-auth",
+                    "timeline": [
+                        {"phase": "created", "status": "completed", "timestamp": "2026-01-01T00:00:00Z"},
+                    ],
+                    "diagnostic": {
+                        "reason": "startup_pending",
+                        "message": "Sandbox startup is pending.",
+                    },
                 }))
             self.fail("unexpected request")
 
         client = MockGatewayClient(handler)
         response = client.create_sandbox({"templateID": "tpl", "waitReady": True})
         self.assertEqual(response["sandboxID"], "sb-1")
+        self.assertEqual(response["timeline"][0]["phase"], "created")
+        self.assertEqual(response["diagnostic"]["reason"], "startup_pending")
         self.assertEqual(response.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
 
     def test_create_sandbox_requires_template_id(self) -> None:

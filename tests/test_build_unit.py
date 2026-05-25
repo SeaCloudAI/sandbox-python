@@ -230,7 +230,15 @@ class BuildServiceUnitTest(unittest.TestCase):
             if request.full_url.endswith("/api/v1/templates/tpl-1/builds"):
                 return FakeResponse(200, json.dumps({"builds": [], "total": 0}))
             if request.full_url.endswith("/api/v1/templates/tpl-1/builds/build-1"):
-                return FakeResponse(200, json.dumps({"buildID": "build-1", "templateID": "tpl-1", "status": "ready"}))
+                return FakeResponse(200, json.dumps({
+                    "buildID": "build-1",
+                    "templateID": "tpl-1",
+                    "status": "ready",
+                    "timeline": [
+                        {"phase": "created", "status": "completed", "timestamp": "2026-01-01T00:00:00Z"},
+                        {"phase": "ready", "status": "completed", "timestamp": "2026-01-01T00:00:10Z"},
+                    ],
+                }))
             if request.full_url.endswith("/status?logsOffset=5&limit=10"):
                 return FakeResponse(200, json.dumps({
                     "buildID": "build-1",
@@ -244,6 +252,13 @@ class BuildServiceUnitTest(unittest.TestCase):
                         "message": "building image",
                     }],
                     "reason": None,
+                    "timeline": [
+                        {"phase": "created", "status": "completed", "timestamp": "2026-01-01T00:00:00Z"},
+                        {"phase": "building", "status": "in_progress", "timestamp": "2026-01-01T00:00:01Z"},
+                    ],
+                    "steps": [
+                        {"step": "build", "status": "in_progress", "logCount": 1, "lastMessage": "building image"},
+                    ],
                     "createdAt": "2026-01-01T00:00:00Z",
                     "updatedAt": "2026-01-01T00:00:01Z",
                 }))
@@ -313,7 +328,10 @@ class BuildServiceUnitTest(unittest.TestCase):
 
         self.assertEqual(history["total"], 0)
         self.assertEqual(build["buildID"], "build-1")
+        self.assertEqual(build["timeline"][1]["phase"], "ready")
         self.assertEqual(status["logEntries"][0]["message"], "building image")
+        self.assertEqual(status["timeline"][1]["phase"], "building")
+        self.assertEqual(status["steps"][0]["status"], "in_progress")
         self.assertEqual(status["logs"], ["raw-line"])
         self.assertEqual(logs["logs"], [])
         self.assertEqual(logs["diagnostic"]["reason"], "cursor_window_empty")

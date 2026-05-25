@@ -562,7 +562,7 @@ Low-level `BuildService` from `sandbox.build` exposes:
 - builds: `create_build`, `get_build_file`, `rollback_template`, `list_builds`, `get_build`, `get_build_status`, `get_build_logs`
 - tags: `assign_template_tags`, `delete_template_tags`, `list_template_tags`
 
-Build logs are served by the platform log API. `get_build_logs` returns structured log entries, pagination metadata, and an optional empty-result diagnostic without exposing the underlying log storage.
+Build logs are served by the platform log API. `get_build_logs` returns structured log entries, pagination metadata, and an optional empty-result diagnostic without exposing the underlying log storage. `get_build` and `get_build_status` may include `timeline` for user-facing build progress; `get_build_status` may also include `steps` for a compact per-step summary.
 
 ### Observability Summary
 
@@ -573,7 +573,7 @@ summary = client.get_observability_summary()
 print(summary["status"], summary.get("usage", {}))
 ```
 
-The summary intentionally returns public product fields only. Use the endpoint hints from `summary["endpoints"]` for sandbox logs, build logs, and full usage-limit checks. Empty sandbox or build log responses may include a public `diagnostic` object explaining whether filters, cursor position, or lack of output caused the empty result.
+The summary intentionally returns public product fields only. Use `summary["actions"]` for next steps, and use endpoint hints from `summary["endpoints"]` for sandbox logs, build logs, and full usage-limit checks. Sandbox and build detail/status responses may include a public `timeline` for phase-level progress. Sandbox responses may include `diagnostic` for startup or paused-state guidance; empty sandbox or build log responses may include a public `diagnostic` object explaining whether filters, cursor position, or lack of output caused the empty result.
 
 The public template contract is split into three layers: E2B create fields (`name`, `tags`, `cpuCount`, `memoryMB`), Atlas extension fields under `extensions` (`baseTemplateID`, `visibility`, `envs`, `volumeMounts`, `workdir`), E2B update field `public`, and build-only fields on `create_build` (`fromImage`, `fromTemplate`, `steps`, `tags`, `startCmd`, `readyCmd`, registry credentials, `steps[].filesHash`).
 Template tags are version pointers to build artifacts. Build requests without explicit tags use `default`; `assign_template_tags("template:v1", ["stable"])` moves `stable` to the build behind `v1`, and sandboxes can reference `template:stable` or `template:buildID`.
