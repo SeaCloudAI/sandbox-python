@@ -75,6 +75,42 @@ class GatewayClientUnitTest(unittest.TestCase):
         client = MockGatewayClient(lambda request: FakeResponse(200, json.dumps({"message": "shutdown initiated"})))
         self.assertEqual(client.shutdown()["message"], "shutdown initiated")
 
+        def observability_handler(request):
+            self.assertEqual(request.full_url, "https://sandbox-gateway.cloud.seaart.ai/api/v1/observability/summary")
+            self.assertEqual(request.get_method(), "GET")
+            self.assertEqual(request.get_header("X-project-id"), "project-1")
+            return FakeResponse(200, json.dumps({
+                "status": "ok",
+                "projectID": "project-1",
+                "userID": "user-1",
+                "usage": {
+                    "sandboxes": {
+                        "resource": "sandboxes",
+                        "user": {"limits": {"held": {"limit": 20, "used": 1, "remaining": 19, "enforced": True}}},
+                    },
+                    "templates": {
+                        "resource": "templates",
+                        "user": {"limits": {"concurrentBuilds": {"limit": 3, "used": 0, "remaining": 3, "enforced": True}}},
+                    },
+                },
+                "availability": {
+                    "sandboxes": {"status": "available"},
+                    "templates": {"status": "available"},
+                },
+                "endpoints": {
+                    "sandboxUsage": "/api/v1/usage/limits",
+                    "templateUsage": "/api/v1/usage/template-limits",
+                    "sandboxLogs": "/api/v1/sandboxes/{sandboxID}/logs",
+                    "buildLogs": "/api/v1/templates/{templateID}/builds/{buildID}/logs",
+                },
+            }))
+
+        client = MockGatewayClient(observability_handler)
+        summary = client.get_observability_summary()
+        self.assertEqual(summary["status"], "ok")
+        self.assertEqual(summary["projectID"], "project-1")
+        self.assertEqual(summary["usage"]["templates"]["user"]["limits"]["concurrentBuilds"]["remaining"], 3)
+
     def test_sandbox_request_encoding(self) -> None:
         def handler(request):
             if request.full_url.endswith("/api/v1/sandboxes"):

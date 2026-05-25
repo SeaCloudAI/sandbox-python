@@ -564,6 +564,17 @@ Low-level `BuildService` from `sandbox.build` exposes:
 
 Build logs are served by the platform log API. `get_build_logs` returns structured log entries without exposing the underlying log storage.
 
+### Observability Summary
+
+Use `client.get_observability_summary()` to get one user/Project-level view of sandbox usage, template/build usage, and the public diagnostic endpoints:
+
+```python
+summary = client.get_observability_summary()
+print(summary["status"], summary.get("usage", {}))
+```
+
+The summary intentionally returns public product fields only. Use the endpoint hints from `summary["endpoints"]` for sandbox logs, build logs, and full usage-limit checks.
+
 The public template contract is split into three layers: E2B create fields (`name`, `tags`, `cpuCount`, `memoryMB`), Atlas extension fields under `extensions` (`baseTemplateID`, `visibility`, `envs`, `volumeMounts`, `workdir`), E2B update field `public`, and build-only fields on `create_build` (`fromImage`, `fromTemplate`, `steps`, `tags`, `startCmd`, `readyCmd`, registry credentials, `steps[].filesHash`).
 Template tags are version pointers to build artifacts. Build requests without explicit tags use `default`; `assign_template_tags("template:v1", ["stable"])` moves `stable` to the build behind `v1`, and sandboxes can reference `template:stable` or `template:buildID`.
 Each mount declares its own storage through `volumeMounts[i].storageType` plus the matching storage fields such as `nfsHostPath`, `storageClass`/`storageSizeGB`, `persistentVolumeClaim`, or `objectBucket`. `workdir` sets the sandbox default working directory and file API root; it does not create a mount by itself.

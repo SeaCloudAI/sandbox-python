@@ -51,6 +51,13 @@ class ControlService(BaseTransport):
         path = self._with_query("/api/v1/sandboxes/metrics", self._encode_metrics_params(params))
         return self._request_json("GET", path, request_timeout_ms=request_timeout_ms)
 
+    def get_observability_summary(self, *, request_timeout_ms: int | None = None) -> dict[str, Any]:
+        return self._request_json(
+            "GET",
+            "/api/v1/observability/summary",
+            request_timeout_ms=request_timeout_ms,
+        )
+
     def delete_sandbox(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> None:
         self._require_sandbox_id(sandbox_id)
         self._request_empty(
