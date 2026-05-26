@@ -314,7 +314,7 @@ class GatewayClientUnitTest(unittest.TestCase):
         )
         logs = client.get_sandbox_logs(
             "sb-1",
-            SandboxLogsParams(cursor=0, limit=10, direction="forward", level="info", search="health"),
+            {"cursor": 0, "limit": 10, "direction": "forward", "level": "info", "search": "health"},
         )
         self.assertEqual(logs["diagnostic"]["reason"], "filters_applied")
         self.assertIn("metadata=app%3Dprod%26team%3Dcore", seen[0])
@@ -523,7 +523,7 @@ class GatewayClientUnitTest(unittest.TestCase):
 
         client = MockGatewayClient(handler)
         single = client.get_sandbox_metrics("sb-1")
-        batch = client.list_sandbox_metrics(SandboxMetricsParams(sandbox_ids=["sb-1", " ", "sb-2"], limit=2))
+        batch = client.list_sandbox_metrics({"sandboxIDs": ["sb-1", " ", "sb-2"], "limit": 2})
 
         self.assertEqual(single["load1"], 0.4)
         self.assertEqual(single["memoryUsagePercent"], 50)

@@ -496,7 +496,7 @@ class FacadeSandboxTest(unittest.TestCase):
             def get_result(self, body, options=None):
                 if body["cmdId"] == "cmd-bg":
                     return {"exit_code": 0, "stdout": "ping\n", "stderr": ""}
-                return {"exit_code": 0, "stdout": "", "stderr": ""}
+                return {"exitCode": 0, "stdout": "", "stderr": ""}
 
         class MockClient:
             def __init__(self) -> None:
@@ -532,6 +532,7 @@ class FacadeSandboxTest(unittest.TestCase):
         self.assertEqual(stdout_chunks, ["live\n"])
         self.assertEqual(connect_chunks, ["live\n"])
         self.assertEqual(pty_waited["pty"], "shell$ ")
+        self.assertEqual(pty_waited["exit_code"], 0)
         send_inputs = [call for call in created._client.runtime.calls if call[0] == "send_input"]
         self.assertEqual(send_inputs[0], ("send_input", {
             "process": {"pid": 41},

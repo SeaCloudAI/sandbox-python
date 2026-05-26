@@ -25,7 +25,7 @@ class ControlService(BaseTransport):
 
     def list_sandboxes(
         self,
-        params: ListSandboxesParams | None = None,
+        params: ListSandboxesParams | Mapping[str, Any] | None = None,
         request_timeout_ms: int | None = None,
     ) -> list[dict[str, Any]]:
         path = self._with_query("/api/v1/sandboxes", self._encode_list_params(params))
@@ -45,7 +45,7 @@ class ControlService(BaseTransport):
 
     def list_sandbox_metrics(
         self,
-        params: SandboxMetricsParams | None = None,
+        params: SandboxMetricsParams | Mapping[str, Any] | None = None,
         request_timeout_ms: int | None = None,
     ) -> dict[str, Any]:
         path = self._with_query("/api/v1/sandboxes/metrics", self._encode_metrics_params(params))
@@ -70,7 +70,7 @@ class ControlService(BaseTransport):
     def get_sandbox_logs(
         self,
         sandbox_id: str,
-        params: SandboxLogsParams | None = None,
+        params: SandboxLogsParams | Mapping[str, Any] | None = None,
         request_timeout_ms: int | None = None,
     ) -> dict[str, Any]:
         self._require_sandbox_id(sandbox_id)
@@ -218,16 +218,20 @@ class ControlService(BaseTransport):
         if status.strip() not in {"starting", "healthy", "error"}:
             raise ValidationError("heartbeat status must be one of starting, healthy, error")
 
-    def _validate_logs_params(self, params: SandboxLogsParams | None) -> None:
+    def _validate_logs_params(self, params: SandboxLogsParams | Mapping[str, Any] | None) -> None:
         if params is None:
             return
-        if params.cursor is not None and (not isinstance(params.cursor, int) or params.cursor < 0):
+        cursor = _param_get(params, "cursor")
+        limit = _param_get(params, "limit")
+        direction = _param_get(params, "direction")
+        search = _param_get(params, "search")
+        if cursor is not None and (not isinstance(cursor, int) or cursor < 0):
             raise ValidationError("logs cursor must be a non-negative integer")
-        if params.limit is not None and (not isinstance(params.limit, int) or params.limit < 0 or params.limit > 1000):
+        if limit is not None and (not isinstance(limit, int) or limit < 0 or limit > 1000):
             raise ValidationError("logs limit must be an integer between 0 and 1000")
-        if params.direction and params.direction not in {"forward", "backward"}:
+        if direction and direction not in {"forward", "backward"}:
             raise ValidationError('logs direction must be "forward" or "backward"')
-        if params.search is not None and len(params.search) > 256:
+        if search is not None and len(search) > 256:
             raise ValidationError("logs search must be at most 256 characters")
 
     def _with_query(self, path: str, params: Mapping[str, Any]) -> str:
@@ -235,45 +239,56 @@ class ControlService(BaseTransport):
             return path
         return f"{path}?{urlencode(params, doseq=True)}"
 
-    def _encode_list_params(self, params: ListSandboxesParams | None) -> dict[str, Any]:
+    def _encode_list_params(self, params: ListSandboxesParams | Mapping[str, Any] | None) -> dict[str, Any]:
         if params is None:
             return {}
         query: dict[str, Any] = {}
-        if params.metadata:
-            query["metadata"] = urlencode(params.metadata)
-        if params.state:
-            query["state"] = [item.strip() for item in params.state if item.strip()]
-        if params.limit is not None:
-            query["limit"] = str(params.limit)
-        if params.next_token:
-            query["nextToken"] = params.next_token
+        metadata = _param_get(params, "metadata")
+        state = _param_get(params, "state")
+        limit = _param_get(params, "limit")
+        next_token = _param_get(params, "next_token", "nextToken")
+        if metadata:
+            query["metadata"] = urlencode(metadata)
+        if state:
+            query["state"] = [item.strip() for item in state if item.strip()]
+        if limit is not None:
+            query["limit"] = str(limit)
+        if next_token:
+            query["nextToken"] = next_token
         return query
 
-    def _encode_metrics_params(self, params: SandboxMetricsParams | None) -> dict[str, str]:
+    def _encode_metrics_params(self, params: SandboxMetricsParams | Mapping[str, Any] | None) -> dict[str, str]:
         if params is None:
             return {}
         query: dict[str, str] = {}
-        ids = [item.strip() for item in (params.sandbox_ids or []) if item.strip()]
+        sandbox_ids = _param_get(params, "sandbox_ids", "sandboxIDs") or []
+        ids = [item.strip() for item in sandbox_ids if item.strip()]
         if ids:
             query["sandbox_ids"] = ",".join(ids)
-        if params.limit is not None:
-            query["limit"] = str(params.limit)
+        limit = _param_get(params, "limit")
+        if limit is not None:
+            query["limit"] = str(limit)
         return query
 
-    def _encode_logs_params(self, params: SandboxLogsParams | None) -> dict[str, str]:
+    def _encode_logs_params(self, params: SandboxLogsParams | Mapping[str, Any] | None) -> dict[str, str]:
         if params is None:
             return {}
         query: dict[str, str] = {}
-        if params.cursor is not None:
-            query["cursor"] = str(params.cursor)
-        if params.limit is not None:
-            query["limit"] = str(params.limit)
-        if params.direction:
-            query["direction"] = params.direction
-        if params.level:
-            query["level"] = params.level
-        if params.search:
-            query["search"] = params.search
+        cursor = _param_get(params, "cursor")
+        limit = _param_get(params, "limit")
+        direction = _param_get(params, "direction")
+        level = _param_get(params, "level")
+        search = _param_get(params, "search")
+        if cursor is not None:
+            query["cursor"] = str(cursor)
+        if limit is not None:
+            query["limit"] = str(limit)
+        if direction:
+            query["direction"] = direction
+        if level:
+            query["level"] = level
+        if search:
+            query["search"] = search
         return query
 
 
@@ -281,3 +296,15 @@ def _reject_unsupported_create_fields(body: Mapping[str, Any]) -> None:
     for key in ("autoResume", "secure", "allow_internet_access", "network", "mcp", "volumeMounts"):
         if key in body:
             raise ValidationError(f"{key} is not supported")
+
+
+def _param_get(params: Any, *names: str) -> Any:
+    if isinstance(params, Mapping):
+        for name in names:
+            if name in params:
+                return params[name]
+        return None
+    for name in names:
+        if hasattr(params, name):
+            return getattr(params, name)
+    return None

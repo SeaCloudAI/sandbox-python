@@ -123,7 +123,7 @@ class CommandHandle:
             "stdout": result["stdout"],
             "stderr": result["stderr"],
             "pty": pty,
-            "exit_code": result["exit_code"],
+            "exit_code": _result_exit_code(result),
         }
 
 
@@ -193,7 +193,7 @@ class Commands:
         return {
             "stdout": result["stdout"],
             "stderr": result["stderr"],
-            "exit_code": result["exit_code"],
+            "exit_code": _result_exit_code(result),
             "duration_ms": result["duration_ms"],
             "error": result.get("error"),
         }
@@ -1102,6 +1102,11 @@ def _is_missing_process_error(error: Exception) -> bool:
         return False
     message = " ".join(str(part) for part in (error, error.detail, error.body) if part).lower()
     return "no such process" in message or "esrch" in message
+
+
+def _result_exit_code(result: Mapping[str, Any]) -> int:
+    value = result.get("exit_code", result.get("exitCode", 0))
+    return int(value or 0)
 
 
 def _is_paused_sandbox_state(data: Mapping[str, Any]) -> bool:
