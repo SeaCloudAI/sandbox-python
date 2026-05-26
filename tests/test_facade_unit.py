@@ -1310,7 +1310,7 @@ class FacadeTemplateTest(unittest.TestCase):
         self.assertRegex(request["steps"][0]["filesHash"], r"^[a-f0-9]{64}$")
         self.assertEqual(request["startCmd"], "node server.js")
         self.assertIn("FROM python:3.12", dockerfile)
-        self.assertIn("RUN pip install numpy", dockerfile)
+        self.assertIn('RUN ["sh", "-lc", "pip install numpy"]', dockerfile)
         self.assertIn("WORKDIR /app", dockerfile)
         self.assertIn("USER root", dockerfile)
 
@@ -1328,6 +1328,16 @@ class FacadeTemplateTest(unittest.TestCase):
             "serviceAccountJSON": {"project_id": "acme"},
         }).request()
         self.assertEqual(gcp_request["fromImageRegistry"]["type"], "gcp")
+
+    def test_template_to_dockerfile_json_escapes_multiline_run_commands(self) -> None:
+        dockerfile = Template.to_dockerfile(
+            Template()
+            .from_image("alpine:3.20")
+            .run_cmd('printf "hello\n" > /tmp/hello.txt'),
+        )
+
+        self.assertIn('RUN ["sh", "-lc", "printf \\"hello\\n\\" > /tmp/hello.txt"]', dockerfile)
+        self.assertNotIn('\n" > /tmp/hello.txt', dockerfile)
 
     def test_template_parses_dockerfiles_from_inline_content_and_file_paths(self) -> None:
         with TemporaryDirectory() as tmp:

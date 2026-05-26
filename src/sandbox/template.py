@@ -533,7 +533,7 @@ class Template:
             if step_type == "COPY" and len(args) >= 2:
                 lines.append(f"COPY {args[0]} {args[1]}")
             elif step_type == "RUN" and args:
-                lines.append(f"RUN {args[0]}")
+                lines.append(_dockerfile_run_line(args[0]))
             elif step_type == "ENV":
                 lines.extend(_dockerfile_env_lines(args))
             elif step_type == "WORKDIR" and args:
@@ -911,6 +911,10 @@ def _dockerfile_env_lines(args: list[str]) -> list[str]:
         if name:
             lines.append(f"ENV {name}={json.dumps(value)}")
     return lines
+
+
+def _dockerfile_run_line(command: str) -> str:
+    return f"RUN [\"sh\", \"-lc\", {json.dumps(command)}]"
 
 
 def _build_npm_install_command(packages: str | list[str] | None, *, dev: bool, g: bool) -> str:
