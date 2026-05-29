@@ -44,7 +44,7 @@ class FakeResponse:
 class MockBuildService(BuildService):
     def __init__(self, handler) -> None:
         super().__init__(
-            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
             api_key="unit-auth-value",
             project_id="project-1",
         )

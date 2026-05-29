@@ -46,7 +46,7 @@ class BuildService(BaseTransport):
         cleaned_body = _compact_mapping(body)
         return self._request_json(
             "POST",
-            "/api/v1/templates",
+            self.api_path("/templates"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=cleaned_body,
             expected_statuses=(202,),
@@ -57,18 +57,18 @@ class BuildService(BaseTransport):
         params: ListTemplatesParams | None = None,
     ) -> list[dict[str, Any]]:
         self._validate_list_templates_params(params)
-        path = self._with_query("/api/v1/templates", self._encode_list_templates_params(params))
+        path = self._with_query(self.api_path("/templates"), self._encode_list_templates_params(params))
         return self._request_json("GET", path)
 
     def get_template_by_alias(self, alias: str) -> dict[str, Any]:
         if not alias.strip():
             raise ValidationError("alias is required")
-        return self._request_json("GET", f"/api/v1/templates/aliases/{quote(alias, safe='')}")
+        return self._request_json("GET", self.api_path(f"/templates/aliases/{quote(alias, safe='')}"))
 
     def resolve_template_ref(self, ref: str) -> dict[str, Any]:
         if not ref.strip():
             raise ValidationError("ref is required")
-        return self._request_json("GET", f"/api/v1/templates/resolve/{quote(ref, safe='')}")
+        return self._request_json("GET", self.api_path(f"/templates/resolve/{quote(ref, safe='')}"))
 
     def get_template(
         self,
@@ -78,7 +78,7 @@ class BuildService(BaseTransport):
         self._require_template_id(template_id)
         self._validate_get_template_params(params)
         path = self._with_query(
-            f"/api/v1/templates/{quote(template_id, safe='')}",
+            self.api_path(f"/templates/{quote(template_id, safe='')}"),
             self._encode_get_template_params(params),
         )
         return self._request_json("GET", path)
@@ -93,7 +93,7 @@ class BuildService(BaseTransport):
         cleaned_body = _compact_mapping(body)
         return self._request_json(
             "PATCH",
-            f"/api/v1/templates/{quote(template_id, safe='')}",
+            self.api_path(f"/templates/{quote(template_id, safe='')}"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=cleaned_body,
         )
@@ -102,7 +102,7 @@ class BuildService(BaseTransport):
         self._require_template_id(template_id)
         self._request_empty(
             "DELETE",
-            f"/api/v1/templates/{quote(template_id, safe='')}",
+            self.api_path(f"/templates/{quote(template_id, safe='')}"),
             expected_statuses=(204,),
         )
 
@@ -118,7 +118,7 @@ class BuildService(BaseTransport):
         self._validate_build_request(body)
         return self._request_json(
             "POST",
-            f"/api/v1/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}",
+            self.api_path(f"/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}"),
             headers=None if body is None or self._is_empty_build_request(body) else self.build_headers({"Content-Type": "application/json"}),
             body=None if body is None or self._is_empty_build_request(body) else body,
             expected_statuses=(202,),
@@ -127,7 +127,7 @@ class BuildService(BaseTransport):
     def get_build_file(self, template_id: str, hash_value: str) -> dict[str, Any]:
         self._require_template_id(template_id)
         self._require_hash(hash_value)
-        return self._request_json("GET", f"/api/v1/templates/{quote(template_id, safe='')}/files/{quote(hash_value, safe='')}")
+        return self._request_json("GET", self.api_path(f"/templates/{quote(template_id, safe='')}/files/{quote(hash_value, safe='')}"))
 
     def rollback_template(
         self,
@@ -139,14 +139,14 @@ class BuildService(BaseTransport):
             raise ValidationError("buildID is required")
         return self._request_json(
             "POST",
-            f"/api/v1/templates/{quote(template_id, safe='')}/rollback",
+            self.api_path(f"/templates/{quote(template_id, safe='')}/rollback"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=body,
         )
 
     def list_builds(self, template_id: str) -> dict[str, Any]:
         self._require_template_id(template_id)
-        return self._request_json("GET", f"/api/v1/templates/{quote(template_id, safe='')}/builds")
+        return self._request_json("GET", self.api_path(f"/templates/{quote(template_id, safe='')}/builds"))
 
     def get_build(
         self,
@@ -155,7 +155,7 @@ class BuildService(BaseTransport):
     ) -> dict[str, Any]:
         self._require_template_id(template_id)
         self._require_build_id(build_id)
-        return self._request_json("GET", f"/api/v1/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}")
+        return self._request_json("GET", self.api_path(f"/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}"))
 
     def get_build_status(
         self,
@@ -167,7 +167,7 @@ class BuildService(BaseTransport):
         self._require_build_id(build_id)
         self._validate_build_status_params(params)
         path = self._with_query(
-            f"/api/v1/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}/status",
+            self.api_path(f"/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}/status"),
             self._encode_build_status_params(params),
         )
         return self._request_json("GET", path)
@@ -182,7 +182,7 @@ class BuildService(BaseTransport):
         self._require_build_id(build_id)
         self._validate_build_logs_params(params)
         path = self._with_query(
-            f"/api/v1/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}/logs",
+            self.api_path(f"/templates/{quote(template_id, safe='')}/builds/{quote(build_id, safe='')}/logs"),
             self._encode_build_logs_params(params),
         )
         return self._request_json("GET", path)
@@ -191,7 +191,7 @@ class BuildService(BaseTransport):
         self._validate_assign_template_tags_body(body)
         return self._request_json(
             "POST",
-            "/api/v1/templates/tags",
+            self.api_path("/templates/tags"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=body,
             expected_statuses=(201,),
@@ -201,7 +201,7 @@ class BuildService(BaseTransport):
         self._validate_delete_template_tags_body(body)
         self._request_empty(
             "DELETE",
-            "/api/v1/templates/tags",
+            self.api_path("/templates/tags"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=body,
             expected_statuses=(204,),
@@ -209,7 +209,7 @@ class BuildService(BaseTransport):
 
     def list_template_tags(self, template_id: str) -> list[dict[str, Any]]:
         self._require_template_id(template_id)
-        return self._request_json("GET", f"/api/v1/templates/{quote(template_id, safe='')}/tags")
+        return self._request_json("GET", self.api_path(f"/templates/{quote(template_id, safe='')}/tags"))
 
     def _require_template_id(self, template_id: str) -> None:
         if not template_id.strip():

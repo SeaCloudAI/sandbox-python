@@ -16,7 +16,7 @@ class ControlService(BaseTransport):
         _reject_unsupported_create_fields(body)
         return self._request_json(
             "POST",
-            "/api/v1/sandboxes",
+            self.api_path("/sandboxes"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=body,
             expected_statuses=(201,),
@@ -28,18 +28,18 @@ class ControlService(BaseTransport):
         params: ListSandboxesParams | Mapping[str, Any] | None = None,
         request_timeout_ms: int | None = None,
     ) -> list[dict[str, Any]]:
-        path = self._with_query("/api/v1/sandboxes", self._encode_list_params(params))
+        path = self._with_query(self.api_path("/sandboxes"), self._encode_list_params(params))
         return self._request_json("GET", path, request_timeout_ms=request_timeout_ms)
 
     def get_sandbox(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> dict[str, Any]:
         self._require_sandbox_id(sandbox_id)
-        return self._request_json("GET", f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}", request_timeout_ms=request_timeout_ms)
+        return self._request_json("GET", self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}"), request_timeout_ms=request_timeout_ms)
 
     def get_sandbox_metrics(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> dict[str, Any]:
         self._require_sandbox_id(sandbox_id)
         return self._request_json(
             "GET",
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/metrics",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}/metrics"),
             request_timeout_ms=request_timeout_ms,
         )
 
@@ -48,13 +48,13 @@ class ControlService(BaseTransport):
         params: SandboxMetricsParams | Mapping[str, Any] | None = None,
         request_timeout_ms: int | None = None,
     ) -> dict[str, Any]:
-        path = self._with_query("/api/v1/sandboxes/metrics", self._encode_metrics_params(params))
+        path = self._with_query(self.api_path("/sandboxes/metrics"), self._encode_metrics_params(params))
         return self._request_json("GET", path, request_timeout_ms=request_timeout_ms)
 
     def get_observability_summary(self, *, request_timeout_ms: int | None = None) -> dict[str, Any]:
         return self._request_json(
             "GET",
-            "/api/v1/observability/summary",
+            self.api_path(f"/observability/summary"),
             request_timeout_ms=request_timeout_ms,
         )
 
@@ -62,7 +62,7 @@ class ControlService(BaseTransport):
         self._require_sandbox_id(sandbox_id)
         self._request_empty(
             "DELETE",
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}"),
             expected_statuses=(204,),
             request_timeout_ms=request_timeout_ms,
         )
@@ -76,7 +76,7 @@ class ControlService(BaseTransport):
         self._require_sandbox_id(sandbox_id)
         self._validate_logs_params(params)
         path = self._with_query(
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/logs",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}/logs"),
             self._encode_logs_params(params),
         )
         return self._request_json("GET", path, request_timeout_ms=request_timeout_ms)
@@ -85,7 +85,7 @@ class ControlService(BaseTransport):
         self._require_sandbox_id(sandbox_id)
         self._request_empty(
             "POST",
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/pause",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}/pause"),
             expected_statuses=(204,),
             request_timeout_ms=request_timeout_ms,
         )
@@ -101,7 +101,7 @@ class ControlService(BaseTransport):
         self._validate_timeout_seconds(body.get("timeout"), "connect timeout")
         response = self._request_response(
             "POST",
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/connect",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}/connect"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=body,
             expected_statuses=(200, 201),
@@ -124,7 +124,7 @@ class ControlService(BaseTransport):
         self._validate_timeout_seconds(body.get("timeout"), "timeout")
         self._request_empty(
             "POST",
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/timeout",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}/timeout"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=body,
             expected_statuses=(204,),
@@ -142,7 +142,7 @@ class ControlService(BaseTransport):
         self._validate_refresh_duration(None if body is None else body.get("duration"))
         self._request_empty(
             "POST",
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/refreshes",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}/refreshes"),
             headers=None if body is None else self.build_headers({"Content-Type": "application/json"}),
             body=body,
             expected_statuses=(204,),
@@ -158,7 +158,7 @@ class ControlService(BaseTransport):
         self._validate_heartbeat_status(str(body.get("status", "")))
         wrapped = self._request_json(
             "POST",
-            f"/api/v1/sandboxes/{quote(sandbox_id, safe='')}/heartbeat",
+            self.api_path(f"/sandboxes/{quote(sandbox_id, safe='')}/heartbeat"),
             headers=self.build_headers({"Content-Type": "application/json"}),
             body=body,
         )

@@ -16,7 +16,6 @@ from urllib.request import Request, urlopen
 from .._version import SDK_VERSION
 from .exceptions import APIError, ConfigurationError, RequestTimeoutError, create_api_error
 
-DEFAULT_BASE_URL = "https://sandbox-gateway.cloud.seaart.ai"
 SDKLogger = Callable[[Mapping[str, Any]], None]
 
 
@@ -64,6 +63,10 @@ class BaseTransport:
         if not normalized_path.startswith("/"):
             normalized_path = f"/{normalized_path}"
         return urljoin(f"{self.base_url}/", normalized_path.lstrip("/"))
+
+    def api_path(self, path: str) -> str:
+        suffix = path.strip()
+        return suffix if suffix.startswith("/") else f"/{suffix}"
 
     def build_headers(self, extra_headers: Mapping[str, str] | None = None) -> dict[str, str]:
         headers = dict(self._default_headers)
@@ -296,7 +299,7 @@ def _resolve_base_url(*, base_url: str | None, domain: str | None) -> str:
     if env_domain:
         return _normalize_domain(env_domain)
 
-    return DEFAULT_BASE_URL
+    return ""
 
 
 def _normalize_domain(value: str) -> str:

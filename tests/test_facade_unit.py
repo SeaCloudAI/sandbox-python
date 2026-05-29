@@ -87,7 +87,7 @@ class FacadeSandboxTest(unittest.TestCase):
     def test_gateway_client_create_requires_template_id(self) -> None:
         class MockClient(GatewayClient):
             def __init__(self) -> None:
-                super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+                super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
 
             def create_sandbox(self, body):
                 self.body = dict(body)
@@ -941,7 +941,7 @@ class FacadeTemplateTest(unittest.TestCase):
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
         logs: list[str] = []
-        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
         client.build = MockBuildService()
         built = client.build_template(
             Template().from_image("docker.io/library/node:20").run_cmd("npm install").set_start_cmd("npm start", wait_for_port(3000)),
@@ -986,7 +986,7 @@ class FacadeTemplateTest(unittest.TestCase):
             def get_build_status(self, template_id, build_id, params):
                 raise AssertionError("get_build_status should not be called for background builds")
 
-        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
         client.build = MockBuildService()
         built = client.build_template_in_background(
             Template().from_image("docker.io/library/node:20"),
@@ -1022,7 +1022,7 @@ class FacadeTemplateTest(unittest.TestCase):
             def get_build(self, template_id, build_id):
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
-        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
         client.build = MockBuildService()
         built = client.build_template(
             Template().from_image("docker.io/library/node:20"),
@@ -1073,7 +1073,7 @@ class FacadeTemplateTest(unittest.TestCase):
                 calls.append(("get_build_status", {"template_id": template_id, "build_id": build_id, "params": params}))
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
-        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
         client.build = MockBuildService()
         self.assertTrue(client.template_exists("demo"))
         status = client.get_template_build_status({"template_id": "tpl-1", "build_id": "build-1"})
@@ -1103,7 +1103,7 @@ class FacadeTemplateTest(unittest.TestCase):
                 calls.append(("get_build_status", {"template_id": template_id, "build_id": build_id, "params": params}))
                 return {"templateID": template_id, "buildID": build_id, "status": "ready"}
 
-        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
         client.build = MockBuildService()
 
         self.assertFalse(client.template_exists("missing"))
@@ -1148,7 +1148,7 @@ class FacadeTemplateTest(unittest.TestCase):
             def delete_template(self, template_id):
                 calls.append(("delete_template", template_id))
 
-        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
         client.build = MockBuildService()
         listed = client.list_templates({"visibility": "team"})
         detail = client.get_template("demo")
@@ -1184,7 +1184,7 @@ class FacadeTemplateTest(unittest.TestCase):
             def delete_template(self, template_id):
                 calls.append(("delete_template", template_id))
 
-        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+        client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
         client.build = MockBuildService()
         listed = client.list_templates({
             "visibility": "team",
@@ -1429,7 +1429,7 @@ class FacadeTemplateTest(unittest.TestCase):
             with TemporaryDirectory() as tmp:
                 source = Path(tmp) / "hello.txt"
                 source.write_text("hello copy\n", encoding="utf-8")
-                client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai", api_key="unit-auth-value")
+                client = GatewayClient(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", api_key="unit-auth-value")
                 client.build = MockBuildService()
                 client.build_template(
                     Template().from_image("docker.io/library/alpine:3.20").copy(str(source), "/app/", user="app"),

@@ -48,7 +48,7 @@ class FakeResponse:
 class MockGatewayClient(GatewayClient):
     def __init__(self, handler) -> None:
         super().__init__(
-            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
             api_key="unit-auth-value",
             project_id="project-1",
         )
@@ -61,7 +61,7 @@ class MockGatewayClient(GatewayClient):
 
 class MockCommandService(CommandService):
     def __init__(self, handler) -> None:
-        super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai", access_token="unit-runtime-auth")
+        super().__init__(base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1", access_token="unit-runtime-auth")
         self._handler = handler
 
     def _open_request(self, method, path, **kwargs):
@@ -217,7 +217,9 @@ class GatewayClientUnitTest(unittest.TestCase):
                     seen_headers.update({key.lower(): value for key, value in request.header_items()})
                     return FakeResponse(200, "[]")
 
-            response = SeaCloudGatewayEnvClient(base_url="https://sandbox-gateway.cloud.seaart.ai").list_sandboxes()
+            response = SeaCloudGatewayEnvClient(
+                base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
+            ).list_sandboxes()
             self.assertEqual(response, [])
             self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-value")
             self.assertEqual(seen_headers["x-api-key"], "unit-auth-value")
@@ -231,7 +233,7 @@ class GatewayClientUnitTest(unittest.TestCase):
         previous_api_key = os.environ.get("SEACLOUD_API_KEY")
         previous_base_url = os.environ.get("SEACLOUD_BASE_URL")
         os.environ["SEACLOUD_API_KEY"] = "unit-auth-value"
-        os.environ["SEACLOUD_BASE_URL"] = "seacloud.example.test"
+        os.environ["SEACLOUD_BASE_URL"] = "seacloud.example.test/api/v1"
         try:
             seen_headers = {}
             seen_urls = []
@@ -256,6 +258,26 @@ class GatewayClientUnitTest(unittest.TestCase):
                 del os.environ["SEACLOUD_BASE_URL"]
             else:
                 os.environ["SEACLOUD_BASE_URL"] = previous_base_url
+
+    def test_gateway_client_base_url_controls_gateway_api_root_path(self) -> None:
+        seen_urls = []
+        seen_headers = {}
+
+        class SeaCloudPrefixedGatewayClient(GatewayClient):
+            def open(self, request):
+                seen_urls.append(request.full_url)
+                seen_headers.update({key.lower(): value for key, value in request.header_items()})
+                return FakeResponse(200, "[]")
+
+        response = SeaCloudPrefixedGatewayClient(
+            base_url="https://seacloud-sandbox-service.dev.seaart.dev/api/v1/sandbox",
+            api_key="unit-auth-value",
+        ).list_sandboxes()
+
+        self.assertEqual(response, [])
+        self.assertEqual(seen_urls[0], "https://seacloud-sandbox-service.dev.seaart.dev/api/v1/sandbox/sandboxes")
+        self.assertEqual(seen_headers["authorization"], "Bearer unit-auth-value")
+        self.assertEqual(seen_headers["x-api-key"], "unit-auth-value")
 
     def test_build_namespace_reuses_gateway_configuration(self) -> None:
         def handler(request):
@@ -333,7 +355,7 @@ class GatewayClientUnitTest(unittest.TestCase):
                 return FakeResponse(200, "[]")
 
         client = LoggingGatewayClient(
-            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
             api_key="unit-auth-value",
             logger=lambda event: events.append(dict(event)),
         )
@@ -353,7 +375,7 @@ class GatewayClientUnitTest(unittest.TestCase):
                 return FakeResponse(200, "[]")
 
         client = LoggingGatewayClient(
-            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
             api_key="unit-auth-value",
             logger=lambda event: (_ for _ in ()).throw(RuntimeError("logger failed")),
         )
@@ -370,7 +392,7 @@ class GatewayClientUnitTest(unittest.TestCase):
                 )
 
         client = FailingGatewayClient(
-            base_url="https://sandbox-gateway.cloud.seaart.ai",
+            base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
             api_key="unit-auth-value",
             logger=lambda event: events.append(dict(event)),
         )
@@ -394,7 +416,7 @@ class GatewayClientUnitTest(unittest.TestCase):
         cmd_service_module.urlopen = fake_urlopen
         try:
             service = CommandService(
-                base_url="https://sandbox-gateway.cloud.seaart.ai",
+                base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
                 access_token="unit-runtime-auth",
                 logger=lambda event: events.append(dict(event)),
             )
