@@ -69,6 +69,23 @@ finally:
 
 That is the core loop: create an isolated cloud runtime, move files in, run real commands, and clean it up. Use `sandbox.get_host(port)` when you start an HTTP service and want a public proxy URL.
 
+## Network Control
+
+Use `network` on create to restrict sandbox egress. `allowOut` and `denyOut` accept IPv4 CIDRs or single IPv4 addresses; the control plane normalizes single IPs to `/32`.
+
+```python
+sandbox = Sandbox.create(
+    "base",
+    waitReady=True,
+    network={
+        "allowInternetAccess": False,
+        "allowOut": ["1.1.1.1"],
+    },
+)
+```
+
+The platform keeps required DNS and control-plane heartbeat traffic working automatically. Domain allowlists are not supported yet; use IP/CIDR rules.
+
 ## Main Entrypoints
 
 - `Sandbox.create(...)`, `Sandbox.connect(...)`, `Sandbox.list(...)`: create and manage sandboxes.

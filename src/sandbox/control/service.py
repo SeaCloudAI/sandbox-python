@@ -293,7 +293,7 @@ class ControlService(BaseTransport):
 
 
 def _reject_unsupported_create_fields(body: Mapping[str, Any]) -> None:
-    for key in ("autoResume", "secure", "allow_internet_access", "network", "mcp", "volumeMounts"):
+    for key in ("autoResume", "secure", "allow_internet_access", "mcp", "volumeMounts"):
         if key in body:
             raise ValidationError(f"{key} is not supported")
 

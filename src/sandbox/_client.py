@@ -304,11 +304,12 @@ def _filter_create_body(source: Mapping[str, Any]) -> dict[str, Any]:
         "metadata": source.get("metadata"),
         "envVars": source.get("envs"),
         "waitReady": source.get("waitReady"),
+        "network": source.get("network"),
     }
     return {key: value for key, value in body.items() if value is not None}
 
 def _reject_unsupported_create_fields(source: Mapping[str, Any]) -> None:
-    for key in ("autoResume", "secure", "allow_internet_access", "network", "mcp", "volumeMounts"):
+    for key in ("autoResume", "secure", "allow_internet_access", "mcp", "volumeMounts"):
         if key in source:
             raise ConfigurationError(f"{key} is not supported")
 

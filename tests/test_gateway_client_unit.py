@@ -170,11 +170,22 @@ class GatewayClientUnitTest(unittest.TestCase):
                 self.assertEqual(request.get_method(), "POST")
                 self.assertEqual(request.get_header("Content-type"), "application/json")
                 self.assertEqual(request.get_header("X-project-id"), "project-1")
-                self.assertEqual(json.loads(request.data.decode("utf-8")), {"templateID": "tpl", "waitReady": True})
+                self.assertEqual(json.loads(request.data.decode("utf-8")), {
+                    "templateID": "tpl",
+                    "waitReady": True,
+                    "network": {
+                        "allowInternetAccess": False,
+                        "allowOut": ["1.1.1.1"],
+                    },
+                })
                 return FakeResponse(201, json.dumps({
                     "sandboxID": "sb-1",
                     "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                     "envdAccessToken": "unit-runtime-auth",
+                    "network": {
+                        "allowInternetAccess": False,
+                        "allowOut": ["1.1.1.1/32"],
+                    },
                     "timeline": [
                         {"phase": "created", "status": "completed", "timestamp": "2026-01-01T00:00:00Z"},
                     ],
@@ -186,8 +197,16 @@ class GatewayClientUnitTest(unittest.TestCase):
             self.fail("unexpected request")
 
         client = MockGatewayClient(handler)
-        response = client.create_sandbox({"templateID": "tpl", "waitReady": True})
+        response = client.create_sandbox({
+            "templateID": "tpl",
+            "waitReady": True,
+            "network": {
+                "allowInternetAccess": False,
+                "allowOut": ["1.1.1.1"],
+            },
+        })
         self.assertEqual(response["sandboxID"], "sb-1")
+        self.assertEqual(response["network"]["allowOut"], ["1.1.1.1/32"])
         self.assertEqual(response["timeline"][0]["phase"], "created")
         self.assertEqual(response["diagnostic"]["reason"], "startup_pending")
         self.assertEqual(response.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
@@ -653,15 +672,25 @@ class GatewayClientUnitTest(unittest.TestCase):
                 "envdUrl": "https://sandbox-gateway.cloud.seaart.ai",
                 "envdAccessToken": "unit-runtime-auth",
                 "status": "running",
-            }))
+        }))
 
         client = MockGatewayClient(handler)
-        sandbox = client.create("tpl", waitReady=True)
+        sandbox = client.create("tpl", waitReady=True, network={
+            "allowInternetAccess": False,
+            "allowOut": ["1.1.1.1"],
+        })
         info = sandbox.get_info()
 
         self.assertEqual(sandbox.sandbox_id, "sb-high")
         self.assertEqual(info["sandbox_id"], "sb-high")
-        self.assertEqual(calls[0][2], {"templateID": "tpl", "waitReady": True})
+        self.assertEqual(calls[0][2], {
+            "templateID": "tpl",
+            "waitReady": True,
+            "network": {
+                "allowInternetAccess": False,
+                "allowOut": ["1.1.1.1"],
+            },
+        })
         self.assertEqual(calls[1][1], "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes/sb-high")
 
     def test_build_template_helper_reuses_build_service(self) -> None:
