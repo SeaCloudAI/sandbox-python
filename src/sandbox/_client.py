@@ -24,6 +24,8 @@ class GatewayClient(ControlService):
         api_key: str | None = None,
         *,
         domain: str | None = None,
+        namespace_id: str | None = None,
+        user_id: str | None = None,
         project_id: str | None = None,
         timeout: float = 30.0,
         request_timeout_ms: int | None = None,
@@ -34,6 +36,8 @@ class GatewayClient(ControlService):
             base_url=base_url,
             api_key=api_key,
             domain=domain,
+            namespace_id=namespace_id,
+            user_id=user_id,
             project_id=project_id,
             timeout=timeout,
             request_timeout_ms=request_timeout_ms,
@@ -44,6 +48,8 @@ class GatewayClient(ControlService):
             base_url=base_url,
             api_key=api_key,
             domain=domain,
+            namespace_id=namespace_id,
+            user_id=user_id,
             project_id=project_id,
             timeout=timeout,
             request_timeout_ms=request_timeout_ms,
@@ -54,7 +60,7 @@ class GatewayClient(ControlService):
     def cmd(self, *, base_url: str, access_token: str = "", timeout: float = 30.0) -> CommandService:
         return self.runtime(base_url=base_url, access_token=access_token, timeout=timeout)
 
-    def create_sandbox(self, body: Mapping[str, Any], *, request_timeout_ms: int | None = None) -> SandboxInstance:
+    def create_sandbox(self, body: Mapping[str, Any] | None = None, *, request_timeout_ms: int | None = None) -> SandboxInstance:
         return SandboxInstance(self, super().create_sandbox(body, request_timeout_ms=request_timeout_ms))
 
     def get_sandbox(self, sandbox_id: str, *, request_timeout_ms: int | None = None) -> SandboxInstance:
@@ -295,21 +301,22 @@ def _filter_create_body(source: Mapping[str, Any]) -> dict[str, Any]:
     _reject_unsupported_create_fields(source)
     template_id = source.get("template")
     normalized_template_id = str(template_id).strip() if template_id is not None else ""
-    if not normalized_template_id:
-        raise ConfigurationError("templateID is required")
     body = {
-        "templateID": normalized_template_id,
+        "templateID": normalized_template_id or None,
         "timeout": _normalize_lifecycle_timeout_seconds(source),
         "autoPause": source.get("autoPause"),
+        "autoResume": source.get("autoResume"),
+        "allowInternetAccess": source.get("allowInternetAccess", source.get("allow_internet_access")),
         "metadata": source.get("metadata"),
         "envVars": source.get("envs"),
         "waitReady": source.get("waitReady"),
         "network": source.get("network"),
+        "volumeMounts": source.get("volumeMounts"),
     }
     return {key: value for key, value in body.items() if value is not None}
 
 def _reject_unsupported_create_fields(source: Mapping[str, Any]) -> None:
-    for key in ("autoResume", "secure", "allow_internet_access", "mcp", "volumeMounts"):
+    for key in ("secure", "mcp", "volume_mounts"):
         if key in source:
             raise ConfigurationError(f"{key} is not supported")
 

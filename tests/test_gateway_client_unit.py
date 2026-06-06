@@ -17,10 +17,18 @@ from sandbox.core import RateLimitError
 
 
 class FakeResponse:
-    def __init__(self, status: int, body: str, reason: str = "OK", raw_body: bytes | None = None) -> None:
+    def __init__(
+        self,
+        status: int,
+        body: str,
+        reason: str = "OK",
+        raw_body: bytes | None = None,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         self.status = status
         self._body = raw_body if raw_body is not None else body.encode("utf-8")
         self.reason = reason
+        self.headers = headers or {}
 
     def read(self, size: int = -1) -> bytes:
         if size is None or size < 0:
@@ -211,19 +219,121 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertEqual(response["diagnostic"]["reason"], "startup_pending")
         self.assertEqual(response.runtime.base_url, "https://sandbox-gateway.cloud.seaart.ai")
 
-    def test_create_sandbox_requires_template_id(self) -> None:
+    def test_create_sandbox_defaults_template_when_omitted(self) -> None:
         def handler(request):
             self.assertEqual(request.full_url, "https://sandbox-gateway.cloud.seaart.ai/api/v1/sandboxes")
-            self.assertEqual(json.loads(request.data.decode("utf-8")), {"templateID": "tpl", "waitReady": False})
-            return FakeResponse(201, json.dumps({"sandboxID": "sb-2"}))
-
-        rejecting_client = MockGatewayClient(lambda request: self.fail("create_sandbox should validate templateID before sending"))
-        with self.assertRaises(ValidationError):
-            rejecting_client.create_sandbox({"waitReady": False})
+            self.assertEqual(json.loads(request.data.decode("utf-8")), {
+                "waitReady": False,
+                "autoResume": True,
+                "allowInternetAccess": False,
+                "volumeMounts": [{"name": "cache", "path": "/cache"}],
+            })
+            return FakeResponse(201, json.dumps({"sandboxID": "sb-2", "templateID": "base"}))
 
         client = MockGatewayClient(handler)
-        response = client.create_sandbox({"templateID": "tpl", "waitReady": False})
+        response = client.create_sandbox({
+            "waitReady": False,
+            "autoResume": True,
+            "allowInternetAccess": False,
+            "volumeMounts": [{"name": "cache", "path": "/cache"}],
+        })
         self.assertEqual(response["sandboxID"], "sb-2")
+
+    def test_lifecycle_volumes_and_teams_requests(self) -> None:
+        calls: list[tuple[str, str]] = []
+
+        def handler(request):
+            calls.append((request.get_method(), request.full_url))
+            self.assertEqual(request.get_header("X-namespace-id"), "ns-1")
+            self.assertEqual(request.get_header("X-user-id"), "user-1")
+            if request.full_url.endswith("/api/v1/events/sandboxes?limit=5&orderAsc=true&types=sandbox.lifecycle.created"):
+                return FakeResponse(200, json.dumps([{
+                    "version": "v1",
+                    "id": "evt-1",
+                    "type": "sandbox.lifecycle.created",
+                    "sandboxId": "sb-1",
+                    "sandboxTeamId": "project-1",
+                    "timestamp": "2026-06-04T09:00:00Z",
+                }]))
+            if request.full_url.endswith("/api/v1/events/webhooks") and request.get_method() == "POST":
+                body = json.loads(request.data.decode("utf-8"))
+                self.assertEqual(body["retryPolicy"]["maxAttempts"], 5)
+                return FakeResponse(201, json.dumps({
+                    "id": "wh-1",
+                    "teamId": "project-1",
+                    "name": "lifecycle",
+                    "createdAt": "2026-06-04T09:00:00Z",
+                    "enabled": True,
+                    "url": "https://example.com/hook",
+                    "events": ["sandbox.lifecycle.created"],
+                    "retryPolicy": {"maxAttempts": 5, "delaySeconds": [1, 5], "deadLetterEnabled": True},
+                    "deadLetterUrl": "https://example.com/dlq",
+                }))
+            if request.full_url.endswith("/api/v1/events/webhook-deliveries?webhookID=wh-1"):
+                return FakeResponse(200, json.dumps([{
+                    "id": "del-1",
+                    "eventId": "evt-1",
+                    "webhookId": "wh-1",
+                    "namespaceId": "ns-1",
+                    "teamId": "project-1",
+                    "url": "https://example.com/hook",
+                    "status": "succeeded",
+                    "attempts": 1,
+                    "createdAt": "2026-06-04T09:00:00Z",
+                }]))
+            if request.full_url.endswith("/api/v1/events/webhook-deliveries/del-1/replay"):
+                return FakeResponse(202, json.dumps({
+                    "id": "del-2",
+                    "eventId": "evt-1",
+                    "webhookId": "wh-1",
+                    "namespaceId": "ns-1",
+                    "teamId": "project-1",
+                    "url": "https://example.com/hook",
+                    "status": "pending",
+                    "attempts": 0,
+                    "createdAt": "2026-06-04T09:00:01Z",
+                }))
+            if request.full_url.endswith("/api/v1/volumes") and request.get_method() == "POST":
+                return FakeResponse(201, json.dumps({"volumeID": "vol-1", "name": "cache", "token": "token-1"}))
+            if request.full_url.endswith("/api/v1/volumes") and request.get_method() == "GET":
+                return FakeResponse(200, json.dumps([{"volumeID": "vol-1", "name": "cache"}]))
+            if request.full_url.endswith("/api/v1/teams"):
+                return FakeResponse(200, json.dumps([{"teamID": "project-1", "name": "project-1", "apiKey": "key-1", "isDefault": True}]))
+            if request.full_url.endswith("/api/v1/teams/project-1/metrics/max?metric=concurrent_sandboxes"):
+                return FakeResponse(200, json.dumps({"timestamp": "2026-06-04T09:00:00Z", "timestampUnix": 1780563600, "value": 3}))
+            self.fail(f"unexpected request {request.get_method()} {request.full_url}")
+
+        class EventGatewayClient(GatewayClient):
+            def __init__(self) -> None:
+                super().__init__(
+                    base_url="https://sandbox-gateway.cloud.seaart.ai/api/v1",
+                    api_key="unit-auth-value",
+                    namespace_id="ns-1",
+                    user_id="user-1",
+                    project_id="project-1",
+                )
+
+            def open(self, request):
+                return handler(request)
+
+        client = EventGatewayClient()
+        self.assertEqual(client.list_sandbox_events({"limit": 5, "orderAsc": True, "types": ["sandbox.lifecycle.created"]})[0]["id"], "evt-1")
+        webhook = client.create_webhook({
+            "name": "lifecycle",
+            "url": "https://example.com/hook",
+            "events": ["sandbox.lifecycle.created"],
+            "signatureSecret": "secret",
+            "retryPolicy": {"maxAttempts": 5, "delaySeconds": [1, 5], "deadLetterEnabled": True},
+            "deadLetterUrl": "https://example.com/dlq",
+        })
+        self.assertEqual(webhook["retryPolicy"]["maxAttempts"], 5)
+        self.assertEqual(client.list_webhook_deliveries({"webhookID": "wh-1"})[0]["status"], "succeeded")
+        self.assertEqual(client.replay_webhook_delivery("del-1")["status"], "pending")
+        self.assertEqual(client.create_volume({"name": "cache"})["token"], "token-1")
+        self.assertEqual(client.list_volumes()[0]["volumeID"], "vol-1")
+        self.assertEqual(client.list_teams()[0]["teamID"], "project-1")
+        self.assertEqual(client.get_team_metrics_max("project-1", {"metric": "concurrent_sandboxes"})["value"], 3)
+        self.assertEqual(len(calls), 8)
 
     def test_gateway_client_falls_back_to_seacloud_api_key(self) -> None:
         previous = os.environ.get("SEACLOUD_API_KEY")
@@ -335,7 +445,9 @@ class GatewayClientUnitTest(unittest.TestCase):
 
         def handler(request):
             seen.append(request.full_url)
-            return FakeResponse(200, json.dumps([] if "/sandboxes?" in request.full_url else {
+            if "/sandboxes?" in request.full_url:
+                return FakeResponse(200, json.dumps([]), headers={"X-Next-Token": "Mg", "X-Has-Next": "true"})
+            return FakeResponse(200, json.dumps({
                 "logs": [],
                 "hasMore": False,
                 "diagnostic": {
@@ -345,7 +457,7 @@ class GatewayClientUnitTest(unittest.TestCase):
             }))
 
         client = MockGatewayClient(handler)
-        client.list_sandboxes(
+        page = client.list_sandboxes_page(
             params=type("P", (), {
                 "metadata": {"app": "prod", "team": "core"},
                 "state": ["running", "paused"],
@@ -361,6 +473,8 @@ class GatewayClientUnitTest(unittest.TestCase):
         self.assertIn("metadata=app%3Dprod%26team%3Dcore", seen[0])
         self.assertIn("state=running", seen[0])
         self.assertIn("nextToken=MQ", seen[0])
+        self.assertEqual(page.next_token, "Mg")
+        self.assertTrue(page.has_next)
         self.assertIn("direction=forward", seen[1])
         self.assertIn("search=health", seen[1])
 

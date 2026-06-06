@@ -28,6 +28,8 @@ class BaseTransport:
         api_key: str | None = None,
         *,
         domain: str | None = None,
+        namespace_id: str | None = None,
+        user_id: str | None = None,
         project_id: str | None = None,
         timeout: float = 30.0,
         request_timeout_ms: int | None = None,
@@ -36,6 +38,8 @@ class BaseTransport:
     ) -> None:
         normalized_base_url = _resolve_base_url(base_url=base_url, domain=domain)
         normalized_api_key = (api_key or os.getenv("SEACLOUD_API_KEY") or "").strip()
+        normalized_namespace_id = (namespace_id or "").strip()
+        normalized_user_id = (user_id or "").strip()
         normalized_project_id = (project_id or "").strip()
         resolved_timeout = timeout if request_timeout_ms is None else request_timeout_ms / 1000
 
@@ -55,6 +59,10 @@ class BaseTransport:
             "User-Agent": f"seacloudai-sandbox-python/{SDK_VERSION}",
             "X-API-Key": normalized_api_key,
         }
+        if normalized_namespace_id:
+            self._default_headers["X-Namespace-ID"] = normalized_namespace_id
+        if normalized_user_id:
+            self._default_headers["X-User-ID"] = normalized_user_id
         if normalized_project_id:
             self._default_headers["X-Project-ID"] = normalized_project_id
 
