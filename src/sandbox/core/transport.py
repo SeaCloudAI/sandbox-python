@@ -17,6 +17,7 @@ from .._version import SDK_VERSION
 from .exceptions import APIError, ConfigurationError, RequestTimeoutError, create_api_error
 
 SDKLogger = Callable[[Mapping[str, Any]], None]
+DEFAULT_GATEWAY_BASE_URL = "https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox"
 
 
 class BaseTransport:
@@ -307,7 +308,7 @@ def _resolve_base_url(*, base_url: str | None, domain: str | None) -> str:
     if env_domain:
         return _normalize_domain(env_domain)
 
-    return ""
+    return DEFAULT_GATEWAY_BASE_URL
 
 
 def _normalize_domain(value: str) -> str:

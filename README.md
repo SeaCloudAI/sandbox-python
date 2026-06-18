@@ -21,20 +21,20 @@ pip install seacloud-sandbox
 
 Use environment variables for gateway configuration in all examples and quick starts:
 
-- `SEACLOUD_BASE_URL`: required full gateway API root
+- `SEACLOUD_BASE_URL`: optional full API root override; defaults to `https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox`
 - `SEACLOUD_API_KEY`: preferred API key
 
-Set them once in your shell:
+Set the API key once in your shell. `SEACLOUD_BASE_URL` is optional when you use the default production API root:
 
 ```bash
-export SEACLOUD_BASE_URL="https://sandbox-gateway.cloud.seaart.ai/api/v1"
+export SEACLOUD_BASE_URL="https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox"
 export SEACLOUD_API_KEY="..."
 ```
 
 Example production gateway API root:
 
 ```text
-https://sandbox-gateway.cloud.seaart.ai/api/v1
+https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox
 ```
 
 The SeaCloudAI production gateway is currently hosted under the `seaart.ai` domain.
@@ -42,7 +42,7 @@ The SeaCloudAI production gateway is currently hosted under the `seaart.ai` doma
 For gateways that mount the sandbox API under another path, keep the same client code and configure the full API root:
 
 ```bash
-export SEACLOUD_BASE_URL="https://seacloud-sandbox-service.dev.seaart.dev/api/v1/sandbox"
+export SEACLOUD_BASE_URL="https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox"
 ```
 
 High-level `Sandbox.create(...)` requires an explicit template reference. Pass a concrete template ID such as `tpl-...` or a stable official template type such as `base`, `code-interpreter`, `claude`, or `codex` when your environment publishes those official templates.
@@ -107,7 +107,7 @@ This section is the recommended path for first-time users. It starts from enviro
 ### 1. Configure Environment
 
 ```bash
-export SEACLOUD_BASE_URL="https://sandbox-gateway.cloud.seaart.ai/api/v1"
+export SEACLOUD_BASE_URL="https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox"
 export SEACLOUD_API_KEY="..."
 ```
 

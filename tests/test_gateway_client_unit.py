@@ -388,6 +388,37 @@ class GatewayClientUnitTest(unittest.TestCase):
             else:
                 os.environ["SEACLOUD_BASE_URL"] = previous_base_url
 
+    def test_gateway_client_defaults_to_production_sandbox_service_api_root(self) -> None:
+        previous_api_key = os.environ.get("SEACLOUD_API_KEY")
+        previous_base_url = os.environ.get("SEACLOUD_BASE_URL")
+        os.environ["SEACLOUD_API_KEY"] = "unit-auth-value"
+        os.environ.pop("SEACLOUD_BASE_URL", None)
+        try:
+            seen_headers = {}
+            seen_urls = []
+
+            class SeaCloudDefaultGatewayClient(GatewayClient):
+                def open(self, request):
+                    seen_urls.append(request.full_url)
+                    seen_headers.update({key.lower(): value for key, value in request.header_items()})
+                    return FakeResponse(200, "[]")
+
+            client = SeaCloudDefaultGatewayClient()
+            response = client.list_sandboxes()
+            self.assertEqual(response, [])
+            self.assertEqual(client.base_url, "https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox")
+            self.assertEqual(seen_urls[0], "https://sandbox-service.real-cloud.seaart.ai/api/v1/sandbox/sandboxes")
+            self.assertEqual(seen_headers["x-api-key"], "unit-auth-value")
+        finally:
+            if previous_api_key is None:
+                os.environ.pop("SEACLOUD_API_KEY", None)
+            else:
+                os.environ["SEACLOUD_API_KEY"] = previous_api_key
+            if previous_base_url is None:
+                os.environ.pop("SEACLOUD_BASE_URL", None)
+            else:
+                os.environ["SEACLOUD_BASE_URL"] = previous_base_url
+
     def test_gateway_client_base_url_controls_gateway_api_root_path(self) -> None:
         seen_urls = []
         seen_headers = {}
